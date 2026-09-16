@@ -28,6 +28,8 @@
 #  index_users_on_reset_password_token  (reset_password_token) UNIQUE
 #
 class User < ApplicationRecord
+  rolify
+
   include Devise::JWT::RevocationStrategies::Allowlist
 
   devise :database_authenticatable, :registerable, :confirmable, :recoverable,
@@ -37,6 +39,12 @@ class User < ApplicationRecord
 
   validates :first_name, presence: true
   validates :last_name, presence: true
-  validates :avatar, content_type: Constants::UPLOADED_FILE_CONTENT_TYPES,
-                     size: { less_than_or_equal_to: Constants::UPLOADED_FILE_MAX_SIZE }
+
+  def admin?
+    has_role?(:admin)
+  end
+
+  def support?
+    has_role?(:support)
+  end
 end

@@ -27,6 +27,11 @@ Rails.application.routes.draw do
         devise_for :users, singular: :user, skip: :all
         resource :profile, only: %i[show update]
       end
+
+      namespace :admin do
+        resource :dashboard, only: %i[show]
+      end
+
       resources :blobs, param: :signed_id, only: %i[create show]
     end
   end

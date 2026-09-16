@@ -26,6 +26,7 @@ gem 'rswag'
 gem 'lograge'
 gem 'sentry-ruby'
 gem 'sentry-rails'
+gem 'rolify'
 
 group :development, :test do
   gem 'pry'

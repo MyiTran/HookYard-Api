@@ -7,7 +7,7 @@ module API
         private
 
         def sign_up_params
-          params.require(:user).permit(:email, :first_name, :last_name, :password)
+          params.require(:user).permit(:email, :password, :password_confirmation, :first_name, :last_name, :avatar)
         end
 
         def respond_with(resource, _opts = {})

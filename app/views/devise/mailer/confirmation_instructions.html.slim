@@ -1,6 +1,14 @@
+h2 Confirm your HookYard account
+
 p
   | Welcome #{@email}
+
 p
-  | You can confirm your account email through this code:&nbsp;
-  strong
-    = @token
+  | Please confirm your email address by clicking the link below.
+
+p
+  = link_to 'Confirm my account', "#{ENV.fetch('FRONTEND_URL')}/confirm?confirmation_token=#{ERB::Util.url_encode(@token)}"
+
+p
+  | If you did not create this account, please ignore this email.
+  
