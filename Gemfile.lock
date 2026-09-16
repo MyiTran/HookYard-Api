@@ -334,6 +334,7 @@ GEM
     responders (3.1.1)
       actionpack (>= 5.2)
       railties (>= 5.2)
+    rolify (6.0.1)
     rspec-core (3.13.3)
       rspec-support (~> 3.13.0)
     rspec-expectations (3.13.3)
@@ -499,6 +500,7 @@ DEPENDENCIES
   pundit-matchers
   rack-cors
   rails (~> 8.0.2)
+  rolify
   rspec-rails (~> 7.0.0)
   rswag
   rubocop

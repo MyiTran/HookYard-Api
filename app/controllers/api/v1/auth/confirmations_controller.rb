@@ -10,12 +10,13 @@ module API
         end
 
         def update
-          self.resource = resource_class.confirm_by_token(resource_params[:confirmation_token])
+          token = params[:confirmation_token] || params.dig(:confirmation, :confirmation_token)
+          self.resource = resource_class.confirm_by_token(token)
 
           if resource.errors.empty?
-            render json: { message: I18n.t('devise.confirmations.confirmed') }
+            render json: { message: 'Your account has been confirmed successfully.' }
           else
-            render_resource_errors(resource.errors)
+            render json: { errors: resource.errors.full_messages }, status: :unprocessable_entity
           end
         end
       end
