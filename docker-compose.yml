@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   api:
-    image: gorails:${IMAGE_TAG:-latest}
+    image: hookyard-api:${IMAGE_TAG:-latest}
     platform: linux/amd64
     restart: always
     environment: &app_envs
@@ -30,7 +30,7 @@ services:
       - SENTRY_DNS
 
   sidekiq:
-    image: gorails:${IMAGE_TAG:-latest}
+    image: hookyard-api:${IMAGE_TAG:-latest}
     platform: linux/amd64
     command: ./bin/bundle exec sidekiq
     restart: on-failure

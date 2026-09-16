@@ -16,7 +16,7 @@ require 'action_cable/engine'
 # you've limited to :test, :development, or :production.
 Bundler.require(*Rails.groups)
 
-module GoRailsApi
+module HookyardApi
   class Application < Rails::Application
     # Initialize configuration defaults for originally generated Rails version.
     config.load_defaults 8.0
@@ -49,7 +49,7 @@ module GoRailsApi
     end
 
     # Using session middlewares
-    config.session_store :cookie_store, key: '_go_rails'
+    config.session_store :cookie_store, key: '_hookyard_api'
     config.middleware.use ActionDispatch::Cookies
     config.middleware.use ActionDispatch::Session::CookieStore
 
