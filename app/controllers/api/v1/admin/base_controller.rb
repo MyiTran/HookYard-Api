@@ -1,7 +1,7 @@
 module API
   module V1
     module Admin
-      class BaseController < Api::V1::BaseController
+      class BaseController < API::V1::BaseController
         before_action :authenticate_user!
         before_action :authorize_admin!
 

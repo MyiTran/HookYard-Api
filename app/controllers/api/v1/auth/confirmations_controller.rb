@@ -10,13 +10,13 @@ module API
         end
 
         def update
-          token = params[:confirmation_token] || params.dig(:confirmation, :confirmation_token)
+          token = params.dig(:user, :confirmation_token).presence || params[:confirmation_token]
           self.resource = resource_class.confirm_by_token(token)
 
           if resource.errors.empty?
             render json: { message: 'Your account has been confirmed successfully.' }
           else
-            render json: { errors: resource.errors.full_messages }, status: :unprocessable_entity
+            render_resource_errors(resource.errors)
           end
         end
       end

@@ -38,6 +38,10 @@ class UserSerializer < ApplicationSerializer
     user.confirmed?
   end
 
+  field :role do |user|
+    user.roles.first&.name
+  end
+
   field :avatar_url do |user|
     (signed_id = user.avatar.signed_id) && blob_url(signed_id)
   end

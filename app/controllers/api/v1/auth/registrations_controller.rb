@@ -4,6 +4,12 @@ module API
       class RegistrationsController < Devise::RegistrationsController
         respond_to :json
 
+        def create
+          super do |resource|
+            resource.add_role(:support) if resource.persisted?
+          end
+        end
+
         private
 
         def sign_up_params
