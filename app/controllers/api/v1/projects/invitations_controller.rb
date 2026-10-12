@@ -1,7 +1,7 @@
-module API
+module Api
   module V1
     module Projects
-      class InvitationsController < API::V1::BaseController
+      class InvitationsController < Api::V1::BaseController
         before_action :set_project
 
         def index

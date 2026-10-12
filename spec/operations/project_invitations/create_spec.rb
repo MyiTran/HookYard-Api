@@ -17,6 +17,6 @@ describe ProjectInvitations::Create, type: :operation do
 
   it 'raises when the recipient does not have an account' do
     expect { described_class.call(project: project, invited_by: owner, email: 'nobody@example.com') }
-      .to raise_error(APIError::UnprocessableEntityError)
+      .to raise_error(ApiError::UnprocessableEntityError)
   end
 end

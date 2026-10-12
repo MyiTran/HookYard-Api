@@ -3,19 +3,19 @@ module ExceptionFilter
 
   included do
     rescue_from Pundit::NotAuthorizedError,
-                with: ->(e) { log_error(e) && render_api_error(APIError::NotAuthorizedError.new) }
+                with: ->(e) { log_error(e) && render_api_error(ApiError::NotAuthorizedError.new) }
 
     rescue_from ActionController::ParameterMissing,
-                with: ->(e) { log_error(e) && render_api_error(APIError::ParamMissingError.new(e.param)) }
+                with: ->(e) { log_error(e) && render_api_error(ApiError::ParamMissingError.new(e.param)) }
 
     rescue_from ActiveRecord::RecordNotFound,
-                with: ->(e) { log_error(e) && render_api_error(APIError::NotFoundError.new) }
+                with: ->(e) { log_error(e) && render_api_error(ApiError::NotFoundError.new) }
 
     rescue_from ActiveRecord::RecordInvalid,
                 ActiveRecord::RecordNotDestroyed,
-                with: ->(e) { log_error(e) && render_api_error(APIError::RecordInvalidError.new(e.record.errors)) }
+                with: ->(e) { log_error(e) && render_api_error(ApiError::RecordInvalidError.new(e.record.errors)) }
 
-    rescue_from APIError::StandardError,
+    rescue_from ApiError::StandardError,
                 with: ->(e) { log_error(e) && render_api_error(e) }
   end
 

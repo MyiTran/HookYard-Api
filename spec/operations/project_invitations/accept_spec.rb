@@ -17,7 +17,7 @@ describe ProjectInvitations::Accept, type: :operation do
   it 'rejects a non-pending invitation without creating a membership' do
     invitation = create(:project_invitation, project: project, invited_by: owner, recipient: recipient, status: :cancelled, cancelled_at: Time.current)
 
-    expect { described_class.call(invitation: invitation) }.to raise_error(APIError::UnprocessableEntityError)
+    expect { described_class.call(invitation: invitation) }.to raise_error(ApiError::UnprocessableEntityError)
     expect(project.project_memberships.exists?(user: recipient)).to be(false)
   end
 

@@ -15,7 +15,7 @@ module Blobs
       if Constants::UPLOADED_FILE_CONTENT_TYPES.exclude?(file.content_type)
         errors << "File type not allowed. Allowed types: #{Constants::UPLOADED_FILE_CONTENT_TYPES.join(', ')}"
       end
-      raise APIError::BadRequestError.new(errors: errors) if errors.any?
+      raise ApiError::BadRequestError.new(errors: errors) if errors.any?
     end
 
     def create_and_upload!(file)
