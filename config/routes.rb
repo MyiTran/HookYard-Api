@@ -30,6 +30,15 @@ Rails.application.routes.draw do
 
       resource :dashboard, only: %i[show]
 
+      resources :projects, only: %i[index show create update destroy] do
+        resources :memberships, only: %i[index destroy], controller: 'projects/memberships'
+        resources :invitations, only: %i[index create destroy], controller: 'projects/invitations'
+      end
+
+      resources :invitations, only: %i[index] do
+        patch :accept, on: :member
+      end
+
       namespace :admin do
         resource :dashboard, only: %i[show]
       end

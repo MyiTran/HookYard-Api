@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_09_16_042256) do
+ActiveRecord::Schema[8.0].define(version: 2026_10_12_120003) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -50,6 +50,40 @@ ActiveRecord::Schema[8.0].define(version: 2026_09_16_042256) do
     t.uuid "user_id", null: false
     t.index ["jti"], name: "index_allowlisted_jwts_on_jti", unique: true
     t.index ["user_id"], name: "index_allowlisted_jwts_on_user_id"
+  end
+
+  create_table "project_invitations", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "project_id", null: false
+    t.uuid "invited_by_id", null: false
+    t.uuid "recipient_id", null: false
+    t.string "role", default: "maintainer", null: false
+    t.string "status", default: "pending", null: false
+    t.datetime "accepted_at"
+    t.datetime "cancelled_at"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["invited_by_id"], name: "index_project_invitations_on_invited_by_id"
+    t.index ["project_id", "recipient_id"], name: "index_project_invitations_pending_recipient", unique: true, where: "((status)::text = 'pending'::text)"
+    t.index ["project_id"], name: "index_project_invitations_on_project_id"
+    t.index ["recipient_id"], name: "index_project_invitations_on_recipient_id"
+  end
+
+  create_table "project_memberships", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "project_id", null: false
+    t.uuid "user_id", null: false
+    t.string "role", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["project_id", "user_id"], name: "index_project_memberships_on_project_id_and_user_id", unique: true
+    t.index ["project_id"], name: "index_project_memberships_on_project_id"
+    t.index ["project_id"], name: "index_project_memberships_on_project_id_owner", unique: true, where: "((role)::text = 'owner'::text)"
+    t.index ["user_id"], name: "index_project_memberships_on_user_id"
+  end
+
+  create_table "projects", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.string "name", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
   end
 
   create_table "roles", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -96,4 +130,9 @@ ActiveRecord::Schema[8.0].define(version: 2026_09_16_042256) do
   add_foreign_key "active_storage_attachments", "active_storage_blobs", column: "blob_id"
   add_foreign_key "active_storage_variant_records", "active_storage_blobs", column: "blob_id"
   add_foreign_key "allowlisted_jwts", "users", on_delete: :cascade
+  add_foreign_key "project_invitations", "projects", on_delete: :cascade
+  add_foreign_key "project_invitations", "users", column: "invited_by_id", on_delete: :cascade
+  add_foreign_key "project_invitations", "users", column: "recipient_id", on_delete: :cascade
+  add_foreign_key "project_memberships", "projects", on_delete: :cascade
+  add_foreign_key "project_memberships", "users", on_delete: :cascade
 end
