@@ -1,4 +1,4 @@
-module API
+module Api
   module V1
     module Auth
       class SessionsController < Devise::SessionsController
@@ -19,7 +19,7 @@ module API
         end
 
         def verify_signed_out_user
-          raise APIError::NotAuthenticatedError unless current_user
+          raise ApiError::NotAuthenticatedError unless current_user
 
           respond_to_on_destroy if all_signed_out?
         end

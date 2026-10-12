@@ -1,4 +1,4 @@
-module APIError
+module ApiError
   class RecordInvalidError < StandardError
     def initialize(errors = [])
       super(

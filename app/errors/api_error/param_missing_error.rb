@@ -1,4 +1,4 @@
-module APIError
+module ApiError
   class ParamMissingError < StandardError
     def initialize(param = nil)
       super(

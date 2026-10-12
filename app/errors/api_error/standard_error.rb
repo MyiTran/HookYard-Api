@@ -1,4 +1,4 @@
-module APIError
+module ApiError
   class StandardError < ::StandardError
     attr_reader :message, :errors, :status, :code
 
