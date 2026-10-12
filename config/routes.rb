@@ -28,6 +28,8 @@ Rails.application.routes.draw do
         resource :profile, only: %i[show update]
       end
 
+      resource :dashboard, only: %i[show]
+
       namespace :admin do
         resource :dashboard, only: %i[show]
       end

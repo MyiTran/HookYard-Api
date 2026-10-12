@@ -28,7 +28,22 @@ Context: this is a Golden Owl Rails API **boilerplate** (`README.md`) currently 
 - Prefer clear, descriptive names over short or clever ones.
 - Keep methods focused on one responsibility; avoid deep nesting and prefer early returns when they read better.
 - No magic values — use constants/enums/config (`config/initializers/constants.rb`, model enums such as `Role`).
-- Do not add comments to explain confusing code — simplify the code instead. Comments are only for non-obvious business rules or important constraints.
+- Do not add comments to explain confusing code — simplify the code instead. See **No unnecessary code comments** below for what is allowed.
+
+**No unnecessary code comments**
+
+- Do NOT add comments to normal application code.
+- Prefer self-explanatory names, small methods, and clear structure instead of comments.
+- Do not add comments that merely restate what the code does, e.g. `# get user`, `# check admin`, `# create project`, `// fetch data`, `// handle error`.
+- If code requires a comment to be understandable, refactor the code first.
+- Comments are allowed ONLY for:
+  - non-obvious business constraints;
+  - security-critical rationale;
+  - framework/workaround behavior that cannot be made obvious in code;
+  - temporary compatibility behavior that would otherwise be dangerous to remove.
+- Even in those cases, explain WHY, not WHAT.
+- Do not add TODO/FIXME comments unless explicitly requested.
+- Do not add generated explanatory comments to specs. Specs should explain behavior through `describe` / `context` / `it` names instead.
 
 **Do not duplicate logic**
 
@@ -93,7 +108,7 @@ When implementing a feature, inspect all related layers: model, migration/schema
 
 **Self-review before reporting**
 
-Check: Is any logic duplicated? Is any method/class doing too much? Is code in the correct layer? Are names understandable? Did I introduce unnecessary abstractions? Do specs describe real business behavior and cover the important failure/security paths? Is the API contract still consistent? Is tenant isolation preserved? Is there dead/unused code from the change?
+Check: Is any logic duplicated? Is any method/class doing too much? Is code in the correct layer? Are names understandable? Did I introduce unnecessary abstractions? Did I add any comment that can be removed by improving naming or structure? Are all remaining comments explaining WHY rather than WHAT? Do specs describe real business behavior and cover the important failure/security paths? Is the API contract still consistent? Is tenant isolation preserved? Is there dead/unused code from the change?
 
 ## 4. File, Class, and Folder Conventions
 
