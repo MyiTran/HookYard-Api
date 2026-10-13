@@ -2,7 +2,19 @@ module Api
   module V1
     class ProjectsController < BaseController
       def index
-        render_resource_collection(policy_scope(Project).order(created_at: :desc), each_serializer: ProjectSerializer, current_user: current_user)
+        projects = ProjectsQuery.call(
+          policy_scope(Project),
+          user: current_user,
+          search: params[:search],
+          role: params[:role],
+          order: params[:order]
+        )
+
+        render_resource_collection(
+          projects.includes(:project_memberships),
+          each_serializer: ProjectSerializer,
+          current_user: current_user
+        )
       end
 
       def show

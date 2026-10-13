@@ -38,6 +38,94 @@ describe 'Projects' do
       expect(response).to have_http_status(:ok)
       expect(JSON.parse(response.body)['data'].map { |entry| entry['id'] }).to eq([project.id])
     end
+
+    it 'searches projects by name case-insensitively' do
+      project.update!(name: 'Payment Gateway')
+      create(:project, :with_owner, owner: maintainer, name: 'Internal Tool')
+
+      get '/api/v1/projects', params: { search: 'payment' }, headers: auth_headers(maintainer)
+
+      expect(response).to have_http_status(:ok)
+      expect(JSON.parse(response.body)['data'].map { |entry| entry['name'] }).to eq(['Payment Gateway'])
+    end
+
+    it 'returns an empty collection when no project matches the search' do
+      project.update!(name: 'Payment Gateway')
+
+      get '/api/v1/projects', params: { search: 'nginx' }, headers: auth_headers(maintainer)
+
+      expect(response).to have_http_status(:ok)
+      expect(JSON.parse(response.body)['data']).to eq([])
+    end
+
+    it 'filters projects by the current user membership role' do
+      project.update!(name: 'Maintained')
+      create(:project, :with_owner, owner: maintainer, name: 'Owned')
+
+      get '/api/v1/projects', params: { role: 'owner' }, headers: auth_headers(maintainer)
+
+      expect(JSON.parse(response.body)['data'].map { |entry| entry['name'] }).to eq(['Owned'])
+    end
+
+    it 'filters by project membership role, not the global user role' do
+      admin = create(:user).tap { |user| user.add_role(:admin) }
+      create(:project, :with_owner).tap do |created|
+        create(:project_membership, project: created, user: admin, role: :maintainer)
+      end
+
+      get '/api/v1/projects', params: { role: 'owner' }, headers: auth_headers(admin)
+
+      expect(response).to have_http_status(:ok)
+      expect(JSON.parse(response.body)['data']).to eq([])
+    end
+
+    it 'orders projects by name ascending' do
+      project.update!(name: 'Zeta')
+      create(:project, :with_owner, owner: maintainer, name: 'Alpha')
+
+      get '/api/v1/projects', params: { order: 'name_asc' }, headers: auth_headers(maintainer)
+
+      expect(JSON.parse(response.body)['data'].map { |entry| entry['name'] }).to eq(%w[Alpha Zeta])
+    end
+
+    it 'combines search, role and order' do
+      project.update!(name: 'Payments US')
+      create(:project, :with_owner, owner: maintainer, name: 'Payments EU')
+      create(:project, :with_owner, owner: maintainer, name: 'Payments APAC')
+      create(:project, :with_owner, name: 'Payments Secret')
+
+      get '/api/v1/projects',
+          params: { search: 'payments', role: 'owner', order: 'name_asc' },
+          headers: auth_headers(maintainer)
+
+      expect(JSON.parse(response.body)['data'].map { |entry| entry['name'] }).to eq(['Payments APAC', 'Payments EU'])
+    end
+
+    it 'keeps current_user_role in the serialized collection' do
+      project
+
+      get '/api/v1/projects', headers: auth_headers(maintainer)
+
+      expect(JSON.parse(response.body)['data'].first['current_user_role']).to eq('maintainer')
+    end
+
+    it 'never exposes a foreign project even when its name matches the search' do
+      create(:project, :with_owner, name: 'Payments Secret')
+
+      get '/api/v1/projects', params: { search: 'payments' }, headers: auth_headers(outsider)
+
+      expect(response).to have_http_status(:ok)
+      expect(JSON.parse(response.body)['data']).to eq([])
+    end
+
+    it 'does not leak foreign projects when filtering by role' do
+      create(:project, :with_owner)
+
+      get '/api/v1/projects', params: { role: 'owner' }, headers: auth_headers(outsider)
+
+      expect(response).to have_http_status(:ok)
+      expect(JSON.parse(response.body)['data']).to eq([])
+    end
   end
 
   describe 'GET /api/v1/projects/:id' do
