@@ -1,4 +1,4 @@
-module APIError
+module ApiError
   class NotAuthenticatedError < StandardError
     def initialize(message = nil)
       super(

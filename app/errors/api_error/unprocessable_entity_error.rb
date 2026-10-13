@@ -1,4 +1,4 @@
-module APIError
+module ApiError
   class UnprocessableEntityError < StandardError
     def initialize(message: nil, errors: [])
       super(

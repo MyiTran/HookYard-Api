@@ -2,7 +2,7 @@ class AuthFailureApp < Devise::FailureApp
   def http_auth
     self.status = 401
     self.content_type = :json
-    self.response_body = APIError::NotAuthenticatedError.new(i18n_message).to_json
+    self.response_body = ApiError::NotAuthenticatedError.new(i18n_message).to_json
   end
 end
 

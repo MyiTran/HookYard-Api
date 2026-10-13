@@ -1,4 +1,4 @@
-module API
+module Api
   module V1
     module Auth
       class ConfirmationsController < Devise::ConfirmationsController
@@ -10,10 +10,11 @@ module API
         end
 
         def update
-          self.resource = resource_class.confirm_by_token(resource_params[:confirmation_token])
+          token = params.dig(:user, :confirmation_token).presence || params[:confirmation_token]
+          self.resource = resource_class.confirm_by_token(token)
 
           if resource.errors.empty?
-            render json: { message: I18n.t('devise.confirmations.confirmed') }
+            render json: { message: 'Your account has been confirmed successfully.' }
           else
             render_resource_errors(resource.errors)
           end

@@ -1,13 +1,19 @@
-module API
+module Api
   module V1
     module Auth
       class RegistrationsController < Devise::RegistrationsController
         respond_to :json
 
+        def create
+          super do |resource|
+            resource.add_role(:support) if resource.persisted?
+          end
+        end
+
         private
 
         def sign_up_params
-          params.require(:user).permit(:email, :first_name, :last_name, :password)
+          params.require(:user).permit(:email, :password, :password_confirmation, :first_name, :last_name, :avatar)
         end
 
         def respond_with(resource, _opts = {})
