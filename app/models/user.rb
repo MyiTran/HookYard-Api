@@ -38,9 +38,14 @@ class User < ApplicationRecord
   has_one_attached :avatar
   has_many :project_memberships, dependent: :destroy
   has_many :projects, through: :project_memberships
+  has_many :notifications, dependent: :destroy
 
   validates :first_name, presence: true
   validates :last_name, presence: true
+
+  def name
+    "#{first_name} #{last_name}".strip
+  end
 
   def admin?
     has_role?(:admin)

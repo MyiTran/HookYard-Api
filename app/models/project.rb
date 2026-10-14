@@ -20,6 +20,10 @@ class Project < ApplicationRecord
     project_memberships.exists?(user_id: user.id)
   end
 
+  def owner
+    project_memberships.find_by(role: :owner)&.user
+  end
+
   def owner?(user)
     return false if user.nil?
 

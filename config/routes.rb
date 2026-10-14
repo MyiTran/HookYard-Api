@@ -30,6 +30,13 @@ Rails.application.routes.draw do
 
       resource :dashboard, only: %i[show]
 
+      resource :cable_ticket, only: %i[create]
+
+      resources :notifications, only: %i[index] do
+        patch :read, on: :member
+        patch :read_all, on: :collection
+      end
+
       resources :projects, only: %i[index show create update destroy] do
         scope module: :projects do
           resources :memberships, only: %i[index destroy]
@@ -39,6 +46,7 @@ Rails.application.routes.draw do
 
       resources :invitations, only: %i[index] do
         patch :accept, on: :member
+        patch :decline, on: :member
       end
 
       namespace :admin do

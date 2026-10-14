@@ -71,4 +71,36 @@ describe 'Invitations', type: :request do
       expect(project.project_memberships.where(user: recipient).count).to eq(1)
     end
   end
+
+  describe 'PATCH /api/v1/invitations/:id/decline' do
+    it 'lets the recipient decline without becoming a member' do
+      invitation = create(:project_invitation, project: project, invited_by: owner, recipient: recipient)
+
+      patch "/api/v1/invitations/#{invitation.id}/decline", headers: auth_headers(recipient)
+
+      expect(response).to have_http_status(:ok)
+      expect(invitation.reload).to be_declined
+      expect(invitation.declined_at).to be_present
+      expect(project.project_memberships.exists?(user: recipient)).to be(false)
+    end
+
+    it 'does not let another user decline' do
+      invitation = create(:project_invitation, project: project, invited_by: owner, recipient: recipient)
+
+      patch "/api/v1/invitations/#{invitation.id}/decline", headers: auth_headers(other)
+
+      expect(response).to have_http_status(:not_found)
+      expect(invitation.reload).to be_pending
+    end
+
+    it 'cannot decline an already accepted invitation' do
+      invitation = create(:project_invitation, project: project, invited_by: owner, recipient: recipient,
+                                               status: :accepted, accepted_at: Time.current)
+
+      patch "/api/v1/invitations/#{invitation.id}/decline", headers: auth_headers(recipient)
+
+      expect(response).to have_http_status(:unprocessable_entity)
+      expect(invitation.reload).to be_accepted
+    end
+  end
 end
