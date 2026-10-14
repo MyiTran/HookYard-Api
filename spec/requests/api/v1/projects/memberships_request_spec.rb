@@ -1,6 +1,6 @@
 require 'swagger_helper'
 
-describe 'Projects::Memberships' do
+describe 'Projects::Memberships', type: :request do
   let(:owner) { create(:user) }
   let(:maintainer) { create(:user) }
   let(:outsider) { create(:user) }

@@ -14,8 +14,10 @@ describe ProjectsQuery do
     described_class.call(scope, user: user, **params)
   end
 
-  it 'returns every accessible project when no filter is given' do
-    expect(run).to contain_exactly(owned, maintained)
+  describe 'without filters' do
+    it 'returns every accessible project' do
+      expect(run).to contain_exactly(owned, maintained)
+    end
   end
 
   describe 'search' do
@@ -64,15 +66,19 @@ describe ProjectsQuery do
     end
   end
 
-  it 'combines search, role and order' do
-    create(:project, :with_owner, owner: user, name: 'Payment EU')
+  describe 'combined filters' do
+    it 'combines search, role and order' do
+      create(:project, :with_owner, owner: user, name: 'Payment EU')
 
-    expect(run(search: 'payment', role: 'owner', order: 'name_asc').pluck(:name)).to eq(['Payment API', 'Payment EU'])
+      expect(run(search: 'payment', role: 'owner', order: 'name_asc').pluck(:name)).to eq(['Payment API', 'Payment EU'])
+    end
   end
 
-  it 'never returns a project the user is not a member of' do
-    create(:project, :with_owner, name: 'Payment Secret')
+  describe 'tenant isolation' do
+    it 'never returns a project the user is not a member of' do
+      create(:project, :with_owner, name: 'Payment Secret')
 
-    expect(run(search: 'payment')).to contain_exactly(owned)
+      expect(run(search: 'payment')).to contain_exactly(owned)
+    end
   end
 end
