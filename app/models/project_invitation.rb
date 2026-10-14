@@ -5,6 +5,7 @@
 #  id            :uuid             not null, primary key
 #  accepted_at   :datetime
 #  cancelled_at  :datetime
+#  declined_at   :datetime
 #  role          :string           default("maintainer"), not null
 #  status        :string           default("pending"), not null
 #  created_at    :datetime         not null
@@ -28,7 +29,7 @@
 #
 class ProjectInvitation < ApplicationRecord
   enum :role, { maintainer: 'maintainer' }
-  enum :status, { pending: 'pending', accepted: 'accepted', cancelled: 'cancelled' }
+  enum :status, { pending: 'pending', accepted: 'accepted', cancelled: 'cancelled', declined: 'declined' }
 
   belongs_to :project
   belongs_to :invited_by, class_name: 'User'

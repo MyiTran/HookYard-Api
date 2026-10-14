@@ -12,6 +12,13 @@ module Api
 
         render_resource(ProjectInvitations::Accept.call(invitation: invitation))
       end
+
+      def decline
+        invitation = policy_scope(ProjectInvitation).find(params[:id])
+        authorize invitation, :decline?
+
+        render_resource(ProjectInvitations::Decline.call(invitation: invitation))
+      end
     end
   end
 end

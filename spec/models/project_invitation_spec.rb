@@ -35,9 +35,17 @@ describe ProjectInvitation do
     expect(build(:project_invitation, project: project, invited_by: owner, recipient: recipient)).to be_valid
   end
 
+  it 'allows re-inviting after a decline' do
+    recipient = create(:user)
+    create(:project_invitation, project: project, invited_by: owner, recipient: recipient, status: :declined,
+                                declined_at: Time.current)
+
+    expect(build(:project_invitation, project: project, invited_by: owner, recipient: recipient)).to be_valid
+  end
+
   describe 'statuses' do
-    it 'exposes pending, accepted and cancelled' do
-      expect(described_class.statuses.keys).to contain_exactly('pending', 'accepted', 'cancelled')
+    it 'exposes pending, accepted, cancelled and declined' do
+      expect(described_class.statuses.keys).to contain_exactly('pending', 'accepted', 'cancelled', 'declined')
     end
   end
 end

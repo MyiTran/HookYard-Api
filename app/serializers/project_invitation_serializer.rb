@@ -1,7 +1,7 @@
 class ProjectInvitationSerializer < ApplicationSerializer
   identifier :id
 
-  fields :role, :status, :created_at, :accepted_at, :cancelled_at
+  fields :role, :status, :created_at, :accepted_at, :cancelled_at, :declined_at
 
   field :project do |invitation|
     { id: invitation.project_id, name: invitation.project.name }

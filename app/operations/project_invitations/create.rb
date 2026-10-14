@@ -8,6 +8,17 @@ module ProjectInvitations
         project.project_invitations.create!(invited_by: invited_by, recipient: recipient, role: :maintainer)
       end
 
+      Notification.publish!(
+        user: recipient,
+        actor: invited_by,
+        project: project,
+        project_invitation: invitation,
+        kind: :project_invitation_received,
+        title: 'Project invitation',
+        message: "#{invited_by.name} invited you to #{project.name}",
+        target_url: '/projects'
+      )
+
       invitation
     end
   end
