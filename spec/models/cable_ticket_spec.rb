@@ -1,10 +1,10 @@
 require 'rails_helper'
 
-describe CableTicket do
+describe CableTicket, type: :model do
   let(:user) { create(:user) }
 
   describe '.issue!' do
-    it 'creates a ticket for the user with a token and a future expiry' do
+    it 'creates a persisted ticket bound to the user with a token and a future expiry' do
       ticket = described_class.issue!(user)
 
       expect(ticket).to be_persisted
@@ -16,33 +16,43 @@ describe CableTicket do
   end
 
   describe '.consume' do
-    it 'returns the user and marks the ticket as used' do
-      ticket = described_class.issue!(user)
+    context 'with a valid unused ticket' do
+      it 'returns the user and marks the ticket as used' do
+        ticket = described_class.issue!(user)
 
-      expect(described_class.consume(ticket.token)).to eq(user)
-      expect(ticket.reload.used_at).to be_present
+        expect(described_class.consume(ticket.token)).to eq(user)
+        expect(ticket.reload.used_at).to be_present
+      end
     end
 
-    it 'cannot be consumed twice' do
-      ticket = described_class.issue!(user)
-      described_class.consume(ticket.token)
+    context 'when the ticket has already been used' do
+      it 'returns nil' do
+        ticket = described_class.issue!(user)
+        described_class.consume(ticket.token)
 
-      expect(described_class.consume(ticket.token)).to be_nil
+        expect(described_class.consume(ticket.token)).to be_nil
+      end
     end
 
-    it 'returns nil for an expired ticket' do
-      ticket = described_class.issue!(user)
-      ticket.update!(expires_at: 1.minute.ago)
+    context 'when the ticket has expired' do
+      it 'returns nil' do
+        ticket = described_class.issue!(user)
+        ticket.update!(expires_at: 1.minute.ago)
 
-      expect(described_class.consume(ticket.token)).to be_nil
+        expect(described_class.consume(ticket.token)).to be_nil
+      end
     end
 
-    it 'returns nil for an unknown token' do
-      expect(described_class.consume('unknown-token')).to be_nil
+    context 'when the token is unknown' do
+      it 'returns nil' do
+        expect(described_class.consume('unknown-token')).to be_nil
+      end
     end
 
-    it 'returns nil for a blank token' do
-      expect(described_class.consume(nil)).to be_nil
+    context 'when the token is blank' do
+      it 'returns nil' do
+        expect(described_class.consume(nil)).to be_nil
+      end
     end
   end
 end

@@ -1,6 +1,6 @@
 require 'rails_helper'
 
-describe NotificationsChannel do
+describe NotificationsChannel, type: :channel do
   let(:user) { create(:user) }
   let(:other_user) { create(:user) }
   let(:stream) { described_class.broadcasting_for(user) }
@@ -10,11 +10,13 @@ describe NotificationsChannel do
   describe 'subscription' do
     before { stub_connection(current_user: user) }
 
-    it 'streams for the current user' do
-      subscribe
+    context 'when the connection has a current user' do
+      it 'streams only for that user' do
+        subscribe
 
-      expect(subscription).to be_confirmed
-      expect(subscription).to have_stream_for(user)
+        expect(subscription).to be_confirmed
+        expect(subscription).to have_stream_for(user)
+      end
     end
   end
 
@@ -28,7 +30,7 @@ describe NotificationsChannel do
   end
 
   describe '.broadcast_removed' do
-    it 'signals the given user' do
+    it 'signals the given user only' do
       described_class.broadcast_removed(user)
 
       expect(cable_messages(stream)).to eq([{ 'type' => 'notification.removed' }])
