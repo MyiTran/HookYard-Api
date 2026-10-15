@@ -216,6 +216,11 @@ Rails/BulkChangeTable:
 
 # rubocop-rspec
 
+# Project convention is to declare spec types explicitly (AGENTS.md §10);
+# the type is only "redundant" because infer_spec_type_from_file_location! is on.
+RSpecRails/InferredSpecType:
+  Enabled: false
+
 RSpec/AnyInstance:
   Enabled: false
 

@@ -243,6 +243,70 @@ Load records and delegate complex logic to Operations — do not duplicate the w
 - Do **not run the full suite** unless necessary or explicitly requested.
 - Run **RuboCop** on touched code when practical.
 
+**Spec structure**
+
+- `describe` names the method / endpoint / behavior under test; `context` names a condition or scenario (prefer wording such as `when ...`, `with ...`, `without ...`); `it` states the expected observable result.
+- In model specs, `describe` the specific behavior: `describe 'validations'` for validation rules, `describe '#instance_method'` for instance methods, `describe '.class_method'` for class methods, and `describe 'associations'` only when intentionally testing associations.
+- Avoid vague or implementation-oriented `describe` names (e.g. `'user and project uniqueness'`, `'recipient validations'`, `'owner uniqueness'`). Move the specific condition into `context` (e.g. `describe 'validations'` + `context 'when the project already has an owner'`).
+- Do **not** pile unrelated behaviors under one generic `describe`. Give each endpoint its own `describe`.
+- Keep descriptions specific and readable, and reuse shared setup through `let` / `before` instead of repeating it.
+
+```ruby
+describe 'validations' do
+  context 'when the name is missing' do
+    it 'is invalid' do
+      # ...
+    end
+  end
+end
+
+describe '#owner?' do
+  context 'when the user is the project owner' do
+    # ...
+  end
+end
+
+describe 'GET /api/v1/projects', type: :request do
+  context 'when the user is authenticated' do
+    # ...
+  end
+end
+
+describe NotificationsChannel, type: :channel do
+  describe 'subscription' do
+    context 'when the connection has a current user' do
+      # ...
+    end
+  end
+end
+
+describe ProjectInvitations::Decline, type: :operation do
+  describe '.call' do
+    context 'when the invitation is pending' do
+      # ...
+    end
+  end
+end
+```
+
+**Enum specs**
+
+- Do **not** write a spec whose only purpose is to assert a Rails enum declaration (e.g. that `status` contains `pending` / `accepted` / `cancelled`).
+- Cover enum values indirectly through meaningful business behavior.
+- Do not delete meaningful behavior specs just because they happen to use enum states.
+
+**Explicit spec type**
+
+- Declare the spec `type:` explicitly where a Rails type applies: `type: :model`, `type: :request`, `type: :channel`, `type: :policy`, `type: :job`, and `type: :controller` **only** when the repo actually has controller specs.
+- Do not rely on `infer_spec_type_from_file_location!` — declare the type explicitly even when RSpec could infer it from the path.
+- Do not invent a type that does not fit, and do not add controller specs just to satisfy this rule.
+- For operations / queries there is no matching Rails type — follow the existing repo convention (`type: :operation` where already used, otherwise none).
+
+**General**
+
+- Avoid testing framework behavior Rails already guarantees; assert application/business behavior, plus the important failure and security paths.
+- Do not add generated explanatory comments to specs — the `describe` / `context` / `it` names must tell the story.
+
 ## 11. Safety
 
 - **Never expose** `.env`, credentials, secrets, signing keys, or `config/master.key`.

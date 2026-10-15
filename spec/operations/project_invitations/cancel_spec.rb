@@ -16,26 +16,37 @@ describe ProjectInvitations::Cancel, type: :operation do
     clear_cable_messages(owner_stream)
   end
 
-  it 'cancels a pending invitation' do
-    described_class.call(invitation: invitation)
+  describe '.call' do
+    context 'when the invitation is pending' do
+      it 'marks the invitation as cancelled' do
+        described_class.call(invitation: invitation)
 
-    expect(invitation.reload).to be_cancelled
-    expect(invitation.cancelled_at).to be_present
-  end
+        expect(invitation.reload).to be_cancelled
+        expect(invitation.cancelled_at).to be_present
+      end
 
-  it 'removes the recipient notification, signals removal and does not notify the owner' do
-    described_class.call(invitation: invitation)
+      it 'removes the recipient notification and signals the removal' do
+        described_class.call(invitation: invitation)
 
-    expect(recipient.notifications.where(project_invitation: invitation)).to be_empty
-    expect(owner.notifications).to be_empty
-    expect(cable_messages(recipient_stream)).to eq([{ 'type' => 'notification.removed' }])
-    expect(cable_messages(owner_stream)).to be_empty
-  end
+        expect(recipient.notifications.where(project_invitation: invitation)).to be_empty
+        expect(cable_messages(recipient_stream)).to eq([{ 'type' => 'notification.removed' }])
+      end
 
-  it 'rejects a non-pending invitation' do
-    invitation.update!(status: :accepted, accepted_at: Time.current)
+      it 'does not notify the owner' do
+        described_class.call(invitation: invitation)
 
-    expect { described_class.call(invitation: invitation) }.to raise_error(ApiError::UnprocessableEntityError)
-    expect(cable_messages(recipient_stream)).to be_empty
+        expect(owner.notifications).to be_empty
+        expect(cable_messages(owner_stream)).to be_empty
+      end
+    end
+
+    context 'when the invitation is not pending' do
+      before { invitation.update!(status: :accepted, accepted_at: Time.current) }
+
+      it 'raises an unprocessable entity error and broadcasts nothing' do
+        expect { described_class.call(invitation: invitation) }.to raise_error(ApiError::UnprocessableEntityError)
+        expect(cable_messages(recipient_stream)).to be_empty
+      end
+    end
   end
 end

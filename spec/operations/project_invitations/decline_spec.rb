@@ -16,45 +16,55 @@ describe ProjectInvitations::Decline, type: :operation do
     clear_cable_messages(owner_stream)
   end
 
-  it 'declines a pending invitation without creating a membership' do
-    described_class.call(invitation: invitation)
+  describe '.call' do
+    context 'when the invitation is pending' do
+      it 'marks the invitation as declined' do
+        described_class.call(invitation: invitation)
 
-    expect(invitation.reload).to be_declined
-    expect(invitation.declined_at).to be_present
-    expect(project.project_memberships.exists?(user: recipient)).to be(false)
-  end
+        expect(invitation.reload).to be_declined
+        expect(invitation.declined_at).to be_present
+      end
 
-  it 'removes the recipient pending notification' do
-    described_class.call(invitation: invitation)
+      it 'does not create a project membership' do
+        described_class.call(invitation: invitation)
 
-    expect(recipient.notifications.where(project_invitation: invitation)).to be_empty
-  end
+        expect(project.project_memberships.exists?(user: recipient)).to be(false)
+      end
 
-  it 'notifies the owner that the invitation was declined' do
-    described_class.call(invitation: invitation)
+      it 'removes the recipient notification and signals the removal' do
+        described_class.call(invitation: invitation)
 
-    notification = owner.notifications.sole
-    expect(notification.kind).to eq('project_invitation_declined')
-    expect(notification.title).to eq('Invitation declined')
-    expect(notification.message).to eq("#{recipient.name} declined your invitation to #{project.name}")
-    expect(notification.target_url).to eq("/projects/#{project.id}")
-    expect(notification.actor).to eq(recipient)
-    expect(notification.project_invitation).to eq(invitation)
-  end
+        expect(recipient.notifications.where(project_invitation: invitation)).to be_empty
+        expect(cable_messages(recipient_stream)).to eq([{ 'type' => 'notification.removed' }])
+      end
 
-  it 'broadcasts notification.created to the owner and notification.removed to the recipient' do
-    described_class.call(invitation: invitation)
+      it 'notifies the project owner' do
+        described_class.call(invitation: invitation)
 
-    expect(cable_messages(owner_stream)).to eq([{ 'type' => 'notification.created' }])
-    expect(cable_messages(recipient_stream)).to eq([{ 'type' => 'notification.removed' }])
-  end
+        notification = owner.notifications.sole
+        expect(notification.kind).to eq('project_invitation_declined')
+        expect(notification.title).to eq('Invitation declined')
+        expect(notification.message).to eq("#{recipient.name} declined your invitation to #{project.name}")
+        expect(notification.target_url).to eq("/projects/#{project.id}")
+        expect(notification.actor).to eq(recipient)
+        expect(notification.project_invitation).to eq(invitation)
+        expect(cable_messages(owner_stream)).to eq([{ 'type' => 'notification.created' }])
+      end
+    end
 
-  it 'rejects a non-pending invitation without notifying the owner' do
-    invitation.update!(status: :cancelled, cancelled_at: Time.current)
+    context 'when the invitation is not pending' do
+      before { invitation.update!(status: :cancelled, cancelled_at: Time.current) }
 
-    expect { described_class.call(invitation: invitation) }.to raise_error(ApiError::UnprocessableEntityError)
-    expect(invitation.reload).to be_cancelled
-    expect(owner.notifications).to be_empty
-    expect(cable_messages(owner_stream)).to be_empty
+      it 'raises an unprocessable entity error' do
+        expect { described_class.call(invitation: invitation) }.to raise_error(ApiError::UnprocessableEntityError)
+      end
+
+      it 'does not notify the owner' do
+        expect { described_class.call(invitation: invitation) }.to raise_error(ApiError::UnprocessableEntityError)
+
+        expect(owner.notifications).to be_empty
+        expect(cable_messages(owner_stream)).to be_empty
+      end
+    end
   end
 end

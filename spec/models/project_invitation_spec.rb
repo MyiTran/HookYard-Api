@@ -1,51 +1,59 @@
 require 'rails_helper'
 
-describe ProjectInvitation do
+describe ProjectInvitation, type: :model do
   let(:owner) { create(:user) }
   let(:project) { create(:project, :with_owner, owner: owner) }
 
-  it 'cannot invite the inviter' do
-    invitation = build(:project_invitation, project: project, invited_by: owner, recipient: owner)
+  describe 'validations' do
+    context 'when the recipient is the inviter' do
+      it 'is invalid' do
+        invitation = build(:project_invitation, project: project, invited_by: owner, recipient: owner)
 
-    expect(invitation).not_to be_valid
-    expect(invitation.errors[:recipient]).to be_present
-  end
+        expect(invitation).not_to be_valid
+        expect(invitation.errors[:recipient]).to be_present
+      end
+    end
 
-  it 'cannot invite an existing member' do
-    member = create(:user)
-    create(:project_membership, project: project, user: member, role: :maintainer)
-    invitation = build(:project_invitation, project: project, invited_by: owner, recipient: member)
+    context 'when the recipient is already a member' do
+      it 'is invalid' do
+        member = create(:user)
+        create(:project_membership, project: project, user: member, role: :maintainer)
+        invitation = build(:project_invitation, project: project, invited_by: owner, recipient: member)
 
-    expect(invitation).not_to be_valid
-    expect(invitation.errors[:recipient]).to be_present
-  end
+        expect(invitation).not_to be_valid
+        expect(invitation.errors[:recipient]).to be_present
+      end
+    end
 
-  it 'cannot create two pending invitations for the same recipient' do
-    recipient = create(:user)
-    create(:project_invitation, project: project, invited_by: owner, recipient: recipient)
+    context 'when a pending invitation already exists for the recipient' do
+      let(:recipient) { create(:user) }
 
-    expect { create(:project_invitation, project: project, invited_by: owner, recipient: recipient) }
-      .to raise_error(ActiveRecord::RecordInvalid)
-  end
+      it 'rejects a second pending invitation' do
+        create(:project_invitation, project: project, invited_by: owner, recipient: recipient)
 
-  it 'allows re-inviting after a cancellation' do
-    recipient = create(:user)
-    create(:project_invitation, project: project, invited_by: owner, recipient: recipient, status: :cancelled)
+        expect { create(:project_invitation, project: project, invited_by: owner, recipient: recipient) }
+          .to raise_error(ActiveRecord::RecordInvalid)
+      end
+    end
 
-    expect(build(:project_invitation, project: project, invited_by: owner, recipient: recipient)).to be_valid
-  end
+    context 'when the previous invitation was cancelled' do
+      let(:recipient) { create(:user) }
 
-  it 'allows re-inviting after a decline' do
-    recipient = create(:user)
-    create(:project_invitation, project: project, invited_by: owner, recipient: recipient, status: :declined,
-                                declined_at: Time.current)
+      it 'allows re-inviting the recipient' do
+        create(:project_invitation, project: project, invited_by: owner, recipient: recipient, status: :cancelled)
 
-    expect(build(:project_invitation, project: project, invited_by: owner, recipient: recipient)).to be_valid
-  end
+        expect(build(:project_invitation, project: project, invited_by: owner, recipient: recipient)).to be_valid
+      end
+    end
 
-  describe 'statuses' do
-    it 'exposes pending, accepted, cancelled and declined' do
-      expect(described_class.statuses.keys).to contain_exactly('pending', 'accepted', 'cancelled', 'declined')
+    context 'when the previous invitation was declined' do
+      let(:recipient) { create(:user) }
+
+      it 'allows re-inviting the recipient' do
+        create(:project_invitation, project: project, invited_by: owner, recipient: recipient, status: :declined, declined_at: Time.current)
+
+        expect(build(:project_invitation, project: project, invited_by: owner, recipient: recipient)).to be_valid
+      end
     end
   end
 end
