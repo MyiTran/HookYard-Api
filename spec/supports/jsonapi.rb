@@ -6,6 +6,10 @@ module JSONAPI
   def auth_header(user)
     Devise::JWT::TestHelpers.auth_headers({}, user).fetch('Authorization', nil)
   end
+
+  def auth_headers(user)
+    { 'Authorization' => auth_header(user) }
+  end
 end
 
 RSpec.configure do |config|

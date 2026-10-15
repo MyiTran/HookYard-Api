@@ -36,6 +36,8 @@ class User < ApplicationRecord
          :validatable, :trackable, :jwt_authenticatable, jwt_revocation_strategy: self
 
   has_one_attached :avatar
+  has_many :project_memberships, dependent: :destroy
+  has_many :projects, through: :project_memberships
 
   validates :first_name, presence: true
   validates :last_name, presence: true
