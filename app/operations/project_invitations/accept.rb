@@ -10,6 +10,14 @@ module ProjectInvitations
       end
 
       Notification.remove_for(invitation)
+      notify_project_owner(invitation)
+
+      invitation
+    end
+
+    private
+
+    def notify_project_owner(invitation)
       Notification.publish!(
         user: invitation.project.owner,
         actor: invitation.recipient,
@@ -20,8 +28,6 @@ module ProjectInvitations
         message: "#{invitation.recipient.name} accepted your invitation to #{invitation.project.name}",
         target_url: "/projects/#{invitation.project_id}"
       )
-
-      invitation
     end
   end
 end
