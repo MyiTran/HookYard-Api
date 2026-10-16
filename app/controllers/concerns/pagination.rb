@@ -1,8 +1,10 @@
 module Pagination
   extend ActiveSupport::Concern
 
+  MAX_PAGE_SIZE = 100
+
   PAGY_KEYS_TRANSFORMER = {
-    items: :page_size,
+    limit: :page_size,
     page: :page_number,
     count: :total_count,
     prev: :prev_page,
@@ -11,11 +13,11 @@ module Pagination
   }.freeze
 
   def paginate(collection)
-    pagy(collection, page: page_number, items: page_size)
+    pagy(collection, page: page_number, limit: page_size)
   end
 
   def paginate_array(array)
-    pagy_array(array, page: page_number, items: page_size)
+    pagy_array(array, page: page_number, limit: page_size)
   end
 
   def paginate_meta(pagy)
@@ -27,6 +29,8 @@ module Pagination
   end
 
   def page_size
-    params.dig(:page, :size) || Pagy::DEFAULT[:items]
+    requested = params.dig(:page, :size).to_i
+
+    requested.positive? ? [requested, MAX_PAGE_SIZE].min : Pagy::DEFAULT[:limit]
   end
 end

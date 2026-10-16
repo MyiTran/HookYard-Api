@@ -41,6 +41,11 @@ Rails.application.routes.draw do
         scope module: :projects do
           resources :memberships, only: %i[index destroy]
           resources :invitations, only: %i[index create destroy]
+          resources :endpoints, only: %i[index show create update destroy] do
+            member do
+              post :rotate_signing_secret
+            end
+          end
         end
       end
 
@@ -48,6 +53,8 @@ Rails.application.routes.draw do
         patch :accept, on: :member
         patch :decline, on: :member
       end
+
+      resources :endpoints, only: %i[index]
 
       namespace :admin do
         resource :dashboard, only: %i[show]
