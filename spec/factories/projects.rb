@@ -26,4 +26,15 @@ FactoryBot.define do
     role { :maintainer }
     status { :pending }
   end
+
+  factory :endpoint do
+    project
+    name { Faker::App.name }
+    url { Faker::Internet.url(scheme: 'https') }
+    active { true }
+
+    after(:create) do |endpoint|
+      endpoint.rotate_signing_secret!
+    end
+  end
 end
