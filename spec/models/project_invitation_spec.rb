@@ -45,5 +45,15 @@ describe ProjectInvitation, type: :model do
         expect(build(:project_invitation, project: project, invited_by: owner, recipient: recipient)).to be_valid
       end
     end
+
+    context 'when the previous invitation was declined' do
+      let(:recipient) { create(:user) }
+
+      it 'allows re-inviting the recipient' do
+        create(:project_invitation, project: project, invited_by: owner, recipient: recipient, status: :declined, declined_at: Time.current)
+
+        expect(build(:project_invitation, project: project, invited_by: owner, recipient: recipient)).to be_valid
+      end
+    end
   end
 end

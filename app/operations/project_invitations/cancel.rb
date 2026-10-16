@@ -6,8 +6,11 @@ module ProjectInvitations
         raise ApiError::UnprocessableEntityError.new(message: 'Invitation can not be cancelled') unless invitation.pending?
 
         invitation.update!(status: :cancelled, cancelled_at: Time.current)
-        invitation
       end
+
+      Notification.remove_for(invitation)
+
+      invitation
     end
   end
 end

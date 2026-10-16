@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_10_12_120003) do
+ActiveRecord::Schema[8.0].define(version: 2026_10_13_120004) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -52,6 +52,37 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_12_120003) do
     t.index ["user_id"], name: "index_allowlisted_jwts_on_user_id"
   end
 
+  create_table "cable_tickets", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "user_id", null: false
+    t.string "token", null: false
+    t.datetime "expires_at", null: false
+    t.datetime "used_at"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["expires_at"], name: "index_cable_tickets_on_expires_at"
+    t.index ["token"], name: "index_cable_tickets_on_token", unique: true
+    t.index ["user_id"], name: "index_cable_tickets_on_user_id"
+  end
+
+  create_table "notifications", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "user_id", null: false
+    t.uuid "actor_id"
+    t.uuid "project_id"
+    t.uuid "project_invitation_id"
+    t.string "kind", null: false
+    t.string "title", null: false
+    t.string "message", null: false
+    t.string "target_url"
+    t.datetime "read_at"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["actor_id"], name: "index_notifications_on_actor_id"
+    t.index ["project_id"], name: "index_notifications_on_project_id"
+    t.index ["project_invitation_id"], name: "index_notifications_on_project_invitation_id"
+    t.index ["user_id", "created_at"], name: "index_notifications_on_user_id_and_created_at"
+    t.index ["user_id"], name: "index_notifications_on_user_id"
+  end
+
   create_table "project_invitations", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.uuid "project_id", null: false
     t.uuid "invited_by_id", null: false
@@ -62,6 +93,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_12_120003) do
     t.datetime "cancelled_at"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.datetime "declined_at"
     t.index ["invited_by_id"], name: "index_project_invitations_on_invited_by_id"
     t.index ["project_id", "recipient_id"], name: "index_project_invitations_pending_recipient", unique: true, where: "((status)::text = 'pending'::text)"
     t.index ["project_id"], name: "index_project_invitations_on_project_id"
@@ -130,6 +162,11 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_12_120003) do
   add_foreign_key "active_storage_attachments", "active_storage_blobs", column: "blob_id"
   add_foreign_key "active_storage_variant_records", "active_storage_blobs", column: "blob_id"
   add_foreign_key "allowlisted_jwts", "users", on_delete: :cascade
+  add_foreign_key "cable_tickets", "users", on_delete: :cascade
+  add_foreign_key "notifications", "project_invitations", on_delete: :cascade
+  add_foreign_key "notifications", "projects", on_delete: :cascade
+  add_foreign_key "notifications", "users", column: "actor_id", on_delete: :cascade
+  add_foreign_key "notifications", "users", on_delete: :cascade
   add_foreign_key "project_invitations", "projects", on_delete: :cascade
   add_foreign_key "project_invitations", "users", column: "invited_by_id", on_delete: :cascade
   add_foreign_key "project_invitations", "users", column: "recipient_id", on_delete: :cascade

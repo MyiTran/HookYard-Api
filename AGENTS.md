@@ -245,7 +245,7 @@ Load records and delegate complex logic to Operations — do not duplicate the w
 
 **Spec structure**
 
-- `describe` names the method / endpoint / behavior under test; `context` names a condition or scenario; `it` states the expected result.
+- `describe` names the method / endpoint / behavior under test; `context` names a condition or scenario (prefer wording such as `when ...`, `with ...`, `without ...`); `it` states the expected observable result.
 - In model specs, `describe` the specific behavior: `describe 'validations'` for validation rules, `describe '#instance_method'` for instance methods, `describe '.class_method'` for class methods, and `describe 'associations'` only when intentionally testing associations.
 - Avoid vague or implementation-oriented `describe` names (e.g. `'user and project uniqueness'`, `'recipient validations'`, `'owner uniqueness'`). Move the specific condition into `context` (e.g. `describe 'validations'` + `context 'when the project already has an owner'`).
 - Do **not** pile unrelated behaviors under one generic `describe`. Give each endpoint its own `describe`.
@@ -271,6 +271,22 @@ describe 'GET /api/v1/projects', type: :request do
     # ...
   end
 end
+
+describe NotificationsChannel, type: :channel do
+  describe 'subscription' do
+    context 'when the connection has a current user' do
+      # ...
+    end
+  end
+end
+
+describe ProjectInvitations::Decline, type: :operation do
+  describe '.call' do
+    context 'when the invitation is pending' do
+      # ...
+    end
+  end
+end
 ```
 
 **Enum specs**
@@ -282,6 +298,7 @@ end
 **Explicit spec type**
 
 - Declare the spec `type:` explicitly where a Rails type applies: `type: :model`, `type: :request`, `type: :channel`, `type: :policy`, `type: :job`, and `type: :controller` **only** when the repo actually has controller specs.
+- Do not rely on `infer_spec_type_from_file_location!` — declare the type explicitly even when RSpec could infer it from the path.
 - Do not invent a type that does not fit, and do not add controller specs just to satisfy this rule.
 - For operations / queries there is no matching Rails type — follow the existing repo convention (`type: :operation` where already used, otherwise none).
 
