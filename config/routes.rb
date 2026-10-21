@@ -32,6 +32,10 @@ Rails.application.routes.draw do
 
       resource :cable_ticket, only: %i[create]
 
+      resources :events, only: %i[create]
+
+      resources :messages, only: %i[index]
+
       resources :notifications, only: %i[index] do
         patch :read, on: :member
         patch :read_all, on: :collection
@@ -45,7 +49,10 @@ Rails.application.routes.draw do
             member do
               post :rotate_signing_secret
             end
+            resources :messages, only: %i[index]
           end
+          resources :messages, only: %i[show]
+          resources :api_credentials, only: %i[index create]
         end
       end
 

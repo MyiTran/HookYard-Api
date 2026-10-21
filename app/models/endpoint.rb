@@ -28,6 +28,7 @@ class Endpoint < ApplicationRecord
 
   belongs_to :project
   has_many :endpoint_signing_secrets, dependent: :destroy
+  has_many :messages, dependent: :destroy
 
   scope :archived, -> { where.not(archived_at: nil) }
   scope :not_archived, -> { where(archived_at: nil) }
@@ -71,7 +72,7 @@ class Endpoint < ApplicationRecord
   end
 
   def new_signing_secret
-    SecureRandom.urlsafe_base64(SIGNING_SECRET_BYTES)
+    "whsec_#{Base64.strict_encode64(SecureRandom.random_bytes(SIGNING_SECRET_BYTES))}"
   end
 
   def event_types_must_be_consistent
