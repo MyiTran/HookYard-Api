@@ -52,7 +52,9 @@ Rails.application.routes.draw do
             resources :messages, only: %i[index]
           end
           resources :messages, only: %i[show]
-          resources :api_credentials, only: %i[index create]
+          resources :api_credentials, only: %i[index create] do
+            post :revoke, on: :member
+          end
         end
       end
 

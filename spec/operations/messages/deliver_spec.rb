@@ -141,6 +141,27 @@ describe Messages::Deliver, type: :operation do
       end
     end
 
+    context 'when another worker has already claimed the message' do
+      it 'neither creates a second attempt nor sends a second request' do
+        second_client = instance_double(Webhooks::HttpClient)
+        allow(second_client).to receive(:post)
+        duplicate_result = nil
+
+        allow(http_client).to receive(:post) do |url:, headers:, body:|
+          sent_requests << { url: url, headers: headers, body: body }
+          duplicate_result = described_class.new(http_client: second_client).call(message: Message.find(message.id))
+          http_result
+        end
+
+        described_class.new(http_client: http_client).call(message: message)
+
+        expect(second_client).not_to have_received(:post)
+        expect(duplicate_result).to be_delivering
+        expect(sent_requests.size).to eq(1)
+        expect(message.delivery_attempts.count).to eq(1)
+      end
+    end
+
     context 'when the endpoint signing secret has been rotated' do
       it 'uses the new current version for new deliveries' do
         legacy_secret = endpoint.current_signing_secret.secret
@@ -162,6 +183,19 @@ describe Messages::Deliver, type: :operation do
         endpoint.rotate_signing_secret!
 
         expect(message.delivery_attempts.first.reload.signing_secret_version).to eq(1)
+      end
+
+      it 'never starts a delivery with a secret retired before the claim' do
+        retired_secret = endpoint.current_signing_secret.secret
+        endpoint.rotate_signing_secret!
+
+        described_class.new(http_client: http_client).call(message: message)
+
+        attempt = message.delivery_attempts.first
+        expect(attempt.signing_secret_version).to eq(2)
+        expect(verify_signature(attempt, endpoint.current_signing_secret.secret)).to include('type' => 'order.created')
+        expect { verify_signature(attempt, retired_secret) }
+          .to raise_error(StandardWebhooks::WebhookVerificationError)
       end
     end
   end

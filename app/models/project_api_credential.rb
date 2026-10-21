@@ -61,4 +61,10 @@ class ProjectApiCredential < ApplicationRecord
   def revoked?
     revoked_at.present?
   end
+
+  def revoke!
+    update!(revoked_at: Time.current) unless revoked?
+
+    self
+  end
 end

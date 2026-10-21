@@ -37,7 +37,17 @@ class Message < ApplicationRecord
   belongs_to :endpoint
   has_many :delivery_attempts, -> { order(:attempt_number) }, dependent: :destroy
 
+  validate :event_and_endpoint_share_project
+
   def webhook_id
     "msg_#{id}"
+  end
+
+  private
+
+  def event_and_endpoint_share_project
+    return if event.nil? || endpoint.nil? || event.project_id == endpoint.project_id
+
+    errors.add(:base, 'message event and endpoint must belong to the same project')
   end
 end

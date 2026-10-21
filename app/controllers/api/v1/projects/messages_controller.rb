@@ -16,6 +16,7 @@ module Api
 
         def show
           message = policy_scope(Message)
+                    .where(endpoint_id: @project.endpoints.select(:id), event_id: @project.events.select(:id))
                     .preload(:event, :delivery_attempts, endpoint: :project)
                     .find(params[:id])
           authorize message

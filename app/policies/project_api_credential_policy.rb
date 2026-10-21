@@ -7,6 +7,10 @@ class ProjectApiCredentialPolicy < ApplicationPolicy
     owner?
   end
 
+  def revoke?
+    owner?
+  end
+
   class Scope < ApplicationPolicy::Scope
     def resolve
       user ? scope.where(project: user.projects) : scope.none

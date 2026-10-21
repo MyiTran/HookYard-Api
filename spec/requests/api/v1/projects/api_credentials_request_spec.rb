@@ -74,4 +74,71 @@ describe 'Projects::ApiCredentials', type: :request do
       expect(response).to have_http_status(:not_found)
     end
   end
+
+  describe 'POST /api/v1/projects/:project_id/api_credentials/:id/revoke' do
+    let!(:credential) { create(:project_api_credential, project: project, name: 'Producer') }
+
+    def revoke_path(project_id, credential_id)
+      "/api/v1/projects/#{project_id}/api_credentials/#{credential_id}/revoke"
+    end
+
+    it 'revokes the credential without returning the raw token' do
+      post revoke_path(project.id, credential.id), headers: auth_headers(owner)
+
+      expect(response).to have_http_status(:ok)
+      body = JSON.parse(response.body)
+      expect(body['id']).to eq(credential.id)
+      expect(body['status']).to eq('revoked')
+      expect(body['revoked_at']).to be_present
+      expect(body).not_to have_key('token')
+      expect(body).not_to have_key('token_digest')
+      expect(credential.reload).to be_revoked
+    end
+
+    it 'shows the revoked credential in the listing with its status' do
+      post revoke_path(project.id, credential.id), headers: auth_headers(owner)
+
+      get "/api/v1/projects/#{project.id}/api_credentials", headers: auth_headers(owner)
+
+      entry = JSON.parse(response.body)['data'].first
+      expect(entry['status']).to eq('revoked')
+      expect(entry['revoked_at']).to be_present
+    end
+
+    it 'rejects event ingestion with the revoked token immediately' do
+      credential_record, raw_token = ProjectApiCredentials::Create.call(project: project, name: 'Producer')
+
+      post revoke_path(project.id, credential_record.id), headers: auth_headers(owner)
+
+      expect do
+        post '/api/v1/events',
+             params: { event_type: 'order.created', idempotency_key: 'order-1', payload: { order_id: 'ord_1' } },
+             headers: { 'Authorization' => "Bearer #{raw_token}" }, as: :json
+      end.not_to change(Event, :count)
+
+      expect(response).to have_http_status(:unauthorized)
+    end
+
+    it 'forbids a maintainer from revoking a credential' do
+      post revoke_path(project.id, credential.id), headers: auth_headers(maintainer)
+
+      expect(response).to have_http_status(:forbidden)
+      expect(credential.reload).not_to be_revoked
+    end
+
+    it 'hides the project from a non-member' do
+      post revoke_path(project.id, credential.id), headers: auth_headers(outsider)
+
+      expect(response).to have_http_status(:not_found)
+    end
+
+    it 'does not revoke a credential of another project' do
+      foreign_credential = create(:project_api_credential)
+
+      post revoke_path(project.id, foreign_credential.id), headers: auth_headers(owner)
+
+      expect(response).to have_http_status(:not_found)
+      expect(foreign_credential.reload).not_to be_revoked
+    end
+  end
 end

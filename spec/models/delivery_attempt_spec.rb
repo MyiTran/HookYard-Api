@@ -22,6 +22,32 @@ describe DeliveryAttempt, type: :model do
     end
   end
 
+  describe '#status' do
+    context 'when the attempt has a 2xx response' do
+      it 'is succeeded' do
+        expect(build(:delivery_attempt, response_status: 200).status).to eq('succeeded')
+      end
+    end
+
+    context 'when the attempt has an error response' do
+      it 'is failed' do
+        expect(build(:delivery_attempt, response_status: 503).status).to eq('failed')
+      end
+    end
+
+    context 'when the attempt recorded a transport error' do
+      it 'is failed' do
+        expect(build(:delivery_attempt, error_type: 'Net::OpenTimeout').status).to eq('failed')
+      end
+    end
+
+    context 'when the attempt has no response yet' do
+      it 'is in progress' do
+        expect(build(:delivery_attempt).status).to eq('in_progress')
+      end
+    end
+  end
+
   describe '.truncate_response_body' do
     context 'when the body is longer than the cap' do
       it 'keeps only the first 4096 bytes' do

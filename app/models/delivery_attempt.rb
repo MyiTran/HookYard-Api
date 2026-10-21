@@ -74,6 +74,13 @@ class DeliveryAttempt < ApplicationRecord
     error_type.present?
   end
 
+  def status
+    return 'succeeded' if succeeded?
+    return 'failed' if transport_failed? || response_status.present?
+
+    'in_progress'
+  end
+
   private
 
   def evidence_is_immutable

@@ -250,6 +250,23 @@ describe 'Projects::Messages', type: :request do
       expect(response).to have_http_status(:not_found)
     end
 
+    it 'does not return a message of another project the user also belongs to' do
+      other_project = create(:project, :with_owner, owner: owner)
+      other_message = create(:message, project: other_project)
+
+      get message_path(project.id, other_message.id), headers: auth_headers(owner)
+
+      expect(response).to have_http_status(:not_found)
+    end
+
+    it 'reports an attempt without a response yet as in progress' do
+      create(:delivery_attempt, message: message, attempt_number: 1)
+
+      get message_path(project.id, message.id), headers: auth_headers(maintainer)
+
+      expect(JSON.parse(response.body)['attempts'].first['status']).to eq('in_progress')
+    end
+
     it 'does not let a non-member read the message' do
       message
 

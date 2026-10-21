@@ -25,8 +25,9 @@ module Messages
     attr_reader :http_client, :signer, :message
 
     def claim_attempt
-      message.with_lock do
-        return nil if message.succeeded?
+      message.endpoint.with_lock do
+        message.reload
+        return nil unless message.pending?
 
         secret = current_secret
         return fail_without_secret if secret.nil?
@@ -37,7 +38,7 @@ module Messages
     end
 
     def current_secret
-      EndpointSigningSecret.current.order(:version).find_by(endpoint_id: message.endpoint_id)
+      EndpointSigningSecret.current.find_by(endpoint_id: message.endpoint_id)
     end
 
     def fail_without_secret

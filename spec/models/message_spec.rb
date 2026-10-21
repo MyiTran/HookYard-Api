@@ -21,6 +21,23 @@ describe Message, type: :model do
     end
   end
 
+  describe 'validations' do
+    context 'with the default factory' do
+      it 'is valid' do
+        expect(build(:message)).to be_valid
+      end
+    end
+
+    context 'when the endpoint belongs to a different project than the event' do
+      it 'is invalid' do
+        message = build(:message, event: create(:event), endpoint: create(:endpoint))
+
+        expect(message).not_to be_valid
+        expect(message.errors[:base]).to be_present
+      end
+    end
+  end
+
   describe 'delivery target uniqueness' do
     let(:project) { create(:project) }
     let(:endpoint) { create(:endpoint, project: project) }

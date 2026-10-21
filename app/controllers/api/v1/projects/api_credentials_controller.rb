@@ -33,6 +33,16 @@ module Api
           )
         end
 
+        def revoke
+          credential = @project.project_api_credentials.find(params[:id])
+          authorize credential
+
+          render_resource(
+            ProjectApiCredentials::Revoke.call(credential: credential),
+            serializer: ProjectApiCredentialSerializer
+          )
+        end
+
         private
 
         def set_project
