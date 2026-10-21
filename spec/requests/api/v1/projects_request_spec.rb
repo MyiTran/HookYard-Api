@@ -126,6 +126,114 @@ describe 'Projects', type: :request do
       expect(response).to have_http_status(:ok)
       expect(JSON.parse(response.body)['data']).to eq([])
     end
+
+    it 'requires authentication' do
+      get '/api/v1/projects'
+
+      expect(response).to have_http_status(:unauthorized)
+    end
+
+    describe 'pagination' do
+      it 'returns the first page with pagination metadata by default' do
+        create_list(:project, 3, :with_owner, owner: maintainer)
+
+        get '/api/v1/projects', headers: auth_headers(maintainer)
+
+        body = JSON.parse(response.body)
+        expect(body['data'].size).to eq(3)
+        expect(body['meta']).to eq(
+          'page_number' => 1,
+          'page_size' => 25,
+          'total_count' => 3,
+          'prev_page' => nil,
+          'next_page' => nil,
+          'last_page' => 1
+        )
+      end
+
+      it 'returns the requested page' do
+        create_list(:project, 5, :with_owner, owner: maintainer)
+
+        get '/api/v1/projects', params: { page: { number: 2, size: 2 } }, headers: auth_headers(maintainer)
+
+        body = JSON.parse(response.body)
+        expect(body['data'].size).to eq(2)
+        expect(body['meta']).to include(
+          'page_number' => 2,
+          'page_size' => 2,
+          'total_count' => 5,
+          'prev_page' => 1,
+          'next_page' => 3,
+          'last_page' => 3
+        )
+      end
+
+      it 'keeps a deterministic order across pages' do
+        create_list(:project, 5, :with_owner, owner: maintainer)
+
+        get '/api/v1/projects',
+            params: { order: 'name_asc', page: { number: 1, size: 5 } },
+            headers: auth_headers(maintainer)
+        ordered_ids = JSON.parse(response.body)['data'].map { |entry| entry['id'] }
+
+        get '/api/v1/projects',
+            params: { order: 'name_asc', page: { number: 2, size: 2 } },
+            headers: auth_headers(maintainer)
+
+        expect(JSON.parse(response.body)['data'].map { |entry| entry['id'] }).to eq(ordered_ids[2, 2])
+      end
+
+      it 'applies search and role filters before pagination' do
+        project.update!(name: 'Payments US')
+        create(:project, :with_owner, owner: maintainer, name: 'Payments EU')
+        create(:project, :with_owner, owner: maintainer, name: 'Internal Tool')
+        create(:project, :with_owner, name: 'Payments Secret')
+
+        get '/api/v1/projects',
+            params: { search: 'payments', role: 'owner', page: { number: 1, size: 1 } },
+            headers: auth_headers(maintainer)
+
+        body = JSON.parse(response.body)
+        expect(body['data'].map { |entry| entry['name'] }).to eq(['Payments EU'])
+        expect(body['meta']).to include('total_count' => 1, 'last_page' => 1)
+      end
+
+      it 'counts only accessible projects in the pagination metadata' do
+        create_list(:project, 2, :with_owner, owner: maintainer)
+        create_list(:project, 3, :with_owner)
+
+        get '/api/v1/projects', headers: auth_headers(maintainer)
+
+        body = JSON.parse(response.body)
+        expect(body['data'].size).to eq(2)
+        expect(body['meta']['total_count']).to eq(2)
+      end
+
+      it 'caps the page size through the shared pagination concern' do
+        get '/api/v1/projects', params: { page: { size: 500 } }, headers: auth_headers(maintainer)
+
+        expect(JSON.parse(response.body)['meta']['page_size']).to eq(Pagination::MAX_PAGE_SIZE)
+      end
+
+      it 'returns an empty page past the last page' do
+        create_list(:project, 3, :with_owner, owner: maintainer)
+
+        get '/api/v1/projects', params: { page: { number: 99, size: 2 } }, headers: auth_headers(maintainer)
+
+        body = JSON.parse(response.body)
+        expect(body['data']).to be_empty
+        expect(body['meta']).to include('page_number' => 99, 'last_page' => 2, 'prev_page' => 2)
+      end
+
+      it 'normalizes malformed pagination parameters instead of failing' do
+        create_list(:project, 2, :with_owner, owner: maintainer)
+
+        get '/api/v1/projects', params: { page: 'invalid' }, headers: auth_headers(maintainer)
+
+        expect(response).to have_http_status(:ok)
+        expect(JSON.parse(response.body)['meta']).to include('page_number' => 1, 'page_size' => 25)
+      end
+    end
   end
 
   describe 'GET /api/v1/projects/:id' do
