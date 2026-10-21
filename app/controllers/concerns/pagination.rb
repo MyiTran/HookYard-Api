@@ -1,8 +1,10 @@
 module Pagination
   extend ActiveSupport::Concern
 
+  MAX_PAGE_SIZE = 100
+
   PAGY_KEYS_TRANSFORMER = {
-    items: :page_size,
+    limit: :page_size,
     page: :page_number,
     count: :total_count,
     prev: :prev_page,
@@ -11,11 +13,11 @@ module Pagination
   }.freeze
 
   def paginate(collection)
-    pagy(collection, page: page_number, items: page_size)
+    pagy(collection, page: page_number, limit: page_size)
   end
 
   def paginate_array(array)
-    pagy_array(array, page: page_number, items: page_size)
+    pagy_array(array, page: page_number, limit: page_size)
   end
 
   def paginate_meta(pagy)
@@ -23,10 +25,24 @@ module Pagination
   end
 
   def page_number
-    params.dig(:page, :number) || 1
+    positive_integer(page_params[:number]) || 1
   end
 
   def page_size
-    params.dig(:page, :size) || Pagy::DEFAULT[:items]
+    requested = positive_integer(page_params[:size])
+
+    requested ? [requested, MAX_PAGE_SIZE].min : Pagy::DEFAULT[:limit]
+  end
+
+  def page_params
+    params[:page].is_a?(ActionController::Parameters) ? params[:page] : ActionController::Parameters.new
+  end
+
+  def positive_integer(value)
+    return unless value.is_a?(Integer) || value.is_a?(String)
+    return unless value.to_s.match?(/\A\d+\z/)
+
+    number = value.to_i
+    number if number.positive?
   end
 end
