@@ -228,6 +228,71 @@ describe 'Endpoints', type: :request do
 
         expect(JSON.parse(response.body)['meta']['page_size']).to eq(Pagination::MAX_PAGE_SIZE)
       end
+
+      it 'falls back to the default page when the page parameter is not nested' do
+        create_list(:endpoint, 2, project: project)
+
+        get '/api/v1/endpoints', params: { page: '2' }, headers: auth_headers(owner)
+
+        expect(response).to have_http_status(:ok)
+        expect(JSON.parse(response.body)['meta']).to include('page_number' => 1, 'page_size' => 25)
+      end
+
+      it 'falls back to the default page when the page parameter is an array' do
+        create_list(:endpoint, 2, project: project)
+
+        get '/api/v1/endpoints', params: { page: ['2'] }, headers: auth_headers(owner)
+
+        expect(response).to have_http_status(:ok)
+        expect(JSON.parse(response.body)['meta']).to include('page_number' => 1, 'page_size' => 25)
+      end
+
+      it 'normalizes nested array or hash page values' do
+        create_list(:endpoint, 2, project: project)
+
+        get '/api/v1/endpoints',
+            params: { page: { number: [2], size: { value: 5 } } },
+            headers: auth_headers(owner)
+
+        expect(JSON.parse(response.body)['meta']).to include('page_number' => 1, 'page_size' => 25)
+      end
+
+      it 'falls back to page 1 for non-positive page numbers' do
+        create_list(:endpoint, 2, project: project)
+
+        [0, -1].each do |number|
+          get '/api/v1/endpoints', params: { page: { number: number } }, headers: auth_headers(owner)
+
+          expect(JSON.parse(response.body)['meta']['page_number']).to eq(1),
+                                                                     "expected page number #{number} to fall back to 1"
+        end
+      end
+
+      it 'does not partially accept a non-numeric page number' do
+        create_list(:endpoint, 2, project: project)
+
+        get '/api/v1/endpoints', params: { page: { number: '2abc' } }, headers: auth_headers(owner)
+
+        expect(JSON.parse(response.body)['meta']['page_number']).to eq(1)
+      end
+
+      it 'falls back to the default size for an invalid size' do
+        create_list(:endpoint, 2, project: project)
+
+        get '/api/v1/endpoints', params: { page: { size: ['10'] } }, headers: auth_headers(owner)
+
+        expect(JSON.parse(response.body)['meta']['page_size']).to eq(25)
+      end
+
+      it 'returns an empty page past the last page' do
+        create_list(:endpoint, 3, project: project)
+
+        get '/api/v1/endpoints', params: { page: { number: 99, size: 2 } }, headers: auth_headers(owner)
+
+        body = JSON.parse(response.body)
+        expect(body['data']).to be_empty
+        expect(body['meta']).to include('page_number' => 99, 'last_page' => 2, 'prev_page' => 2)
+      end
     end
   end
 end

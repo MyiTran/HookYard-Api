@@ -25,12 +25,24 @@ module Pagination
   end
 
   def page_number
-    params.dig(:page, :number) || 1
+    positive_integer(page_params[:number]) || 1
   end
 
   def page_size
-    requested = params.dig(:page, :size).to_i
+    requested = positive_integer(page_params[:size])
 
-    requested.positive? ? [requested, MAX_PAGE_SIZE].min : Pagy::DEFAULT[:limit]
+    requested ? [requested, MAX_PAGE_SIZE].min : Pagy::DEFAULT[:limit]
+  end
+
+  def page_params
+    params[:page].is_a?(ActionController::Parameters) ? params[:page] : ActionController::Parameters.new
+  end
+
+  def positive_integer(value)
+    return unless value.is_a?(Integer) || value.is_a?(String)
+    return unless value.to_s.match?(/\A\d+\z/)
+
+    number = value.to_i
+    number if number.positive?
   end
 end
