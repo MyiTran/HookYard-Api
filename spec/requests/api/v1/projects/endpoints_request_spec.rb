@@ -105,6 +105,89 @@ describe 'Projects::Endpoints', type: :request do
         expect(body['data'].size).to eq(2)
         expect(body['meta']['total_count']).to eq(3)
       end
+
+      it 'falls back to the default page when the page parameter is not nested' do
+        create_list(:endpoint, 2, project: project)
+
+        get "/api/v1/projects/#{project.id}/endpoints", params: { page: '2' }, headers: auth_headers(owner)
+
+        expect(response).to have_http_status(:ok)
+        expect(JSON.parse(response.body)['meta']).to include('page_number' => 1, 'page_size' => 25)
+      end
+
+      it 'falls back to the default page when the page parameter is an array' do
+        create_list(:endpoint, 2, project: project)
+
+        get "/api/v1/projects/#{project.id}/endpoints", params: { page: ['2'] }, headers: auth_headers(owner)
+
+        expect(response).to have_http_status(:ok)
+        expect(JSON.parse(response.body)['meta']).to include('page_number' => 1, 'page_size' => 25)
+      end
+
+      it 'normalizes nested array or hash page values' do
+        create_list(:endpoint, 2, project: project)
+
+        get "/api/v1/projects/#{project.id}/endpoints",
+            params: { page: { number: [2], size: { value: 5 } } },
+            headers: auth_headers(owner)
+
+        expect(JSON.parse(response.body)['meta']).to include('page_number' => 1, 'page_size' => 25)
+      end
+
+      it 'falls back to page 1 for non-positive page numbers' do
+        create_list(:endpoint, 2, project: project)
+
+        [0, -1].each do |number|
+          get "/api/v1/projects/#{project.id}/endpoints",
+              params: { page: { number: number } },
+              headers: auth_headers(owner)
+
+          expect(JSON.parse(response.body)['meta']['page_number']).to eq(1),
+                                                                     "expected page number #{number} to fall back to 1"
+        end
+      end
+
+      it 'does not partially accept a non-numeric page number' do
+        create_list(:endpoint, 2, project: project)
+
+        get "/api/v1/projects/#{project.id}/endpoints",
+            params: { page: { number: '2abc' } },
+            headers: auth_headers(owner)
+
+        expect(JSON.parse(response.body)['meta']['page_number']).to eq(1)
+      end
+
+      it 'falls back to the default size for an invalid size' do
+        create_list(:endpoint, 2, project: project)
+
+        get "/api/v1/projects/#{project.id}/endpoints",
+            params: { page: { size: ['10'] } },
+            headers: auth_headers(owner)
+
+        expect(JSON.parse(response.body)['meta']['page_size']).to eq(25)
+      end
+
+      it 'caps the page size at the maximum' do
+        create_list(:endpoint, 2, project: project)
+
+        get "/api/v1/projects/#{project.id}/endpoints",
+            params: { page: { size: 500 } },
+            headers: auth_headers(owner)
+
+        expect(JSON.parse(response.body)['meta']['page_size']).to eq(100)
+      end
+
+      it 'returns an empty page past the last page' do
+        create_list(:endpoint, 3, project: project)
+
+        get "/api/v1/projects/#{project.id}/endpoints",
+            params: { page: { number: 99, size: 2 } },
+            headers: auth_headers(owner)
+
+        body = JSON.parse(response.body)
+        expect(body['data']).to be_empty
+        expect(body['meta']).to include('page_number' => 99, 'last_page' => 2, 'prev_page' => 2)
+      end
     end
   end
 
@@ -181,6 +264,16 @@ describe 'Projects::Endpoints', type: :request do
            headers: auth_headers(owner), as: :json
 
       expect(response).to have_http_status(:unprocessable_entity)
+    end
+
+    it 'rejects a non-public url' do
+      post "/api/v1/projects/#{project.id}/endpoints",
+           params: { endpoint: { name: 'Billing', url: 'http://127.0.0.1:3000/hooks' } },
+           headers: auth_headers(owner), as: :json
+
+      expect(response).to have_http_status(:unprocessable_entity)
+      expect(JSON.parse(response.body)['errors']).to contain_exactly(hash_including('field' => 'url'))
+      expect(project.endpoints.count).to eq(0)
     end
 
     it 'creates an inactive endpoint when active is false' do
@@ -273,6 +366,18 @@ describe 'Projects::Endpoints', type: :request do
 
       expect(response).to have_http_status(:ok)
       expect(endpoint.reload.active).to be(true)
+    end
+
+    it 'rejects a non-public url' do
+      endpoint = create(:endpoint, project: project)
+      original_url = endpoint.url
+
+      patch "/api/v1/projects/#{project.id}/endpoints/#{endpoint.id}",
+            params: { endpoint: { url: 'http://169.254.169.254/latest/meta-data' } },
+            headers: auth_headers(owner), as: :json
+
+      expect(response).to have_http_status(:unprocessable_entity)
+      expect(endpoint.reload.url).to eq(original_url)
     end
 
     it 'forbids a maintainer' do

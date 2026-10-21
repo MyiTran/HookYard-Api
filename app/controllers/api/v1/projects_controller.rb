@@ -2,18 +2,20 @@ module Api
   module V1
     class ProjectsController < BaseController
       def index
-        projects = ProjectsQuery.call(
+        projects_scope = ProjectsQuery.call(
           policy_scope(Project),
           user: current_user,
           search: params[:search],
           role: params[:role],
           order: params[:order]
         )
+        pagy, projects = paginate(projects_scope)
 
         render_resource_collection(
           projects.includes(:project_memberships),
           each_serializer: ProjectSerializer,
-          current_user: current_user
+          current_user: current_user,
+          pagy: pagy
         )
       end
 

@@ -41,6 +41,75 @@ describe Endpoint, type: :model do
         expect(build(:endpoint, url: 'http://example.com/hooks')).to be_valid
         expect(build(:endpoint, url: 'https://example.com/hooks')).to be_valid
       end
+
+      it 'accepts a public destination with a custom port' do
+        expect(build(:endpoint, url: 'https://example.com:8443/hooks')).to be_valid
+        expect(build(:endpoint, url: 'http://example.com:8080/hooks')).to be_valid
+      end
+
+      it 'accepts public IP literals' do
+        expect(build(:endpoint, url: 'http://93.184.216.34/hooks')).to be_valid
+        expect(build(:endpoint, url: 'https://[2606:4700:4700::1111]/hooks')).to be_valid
+      end
+    end
+
+    context 'when the url points to a loopback destination' do
+      it 'is invalid' do
+        expect_invalid_url('http://127.0.0.1/hooks')
+        expect_invalid_url('http://localhost/hooks')
+        expect_invalid_url('http://LOCALHOST./hooks')
+        expect_invalid_url('http://[::1]/hooks')
+        expect_invalid_url('http://[::ffff:127.0.0.1]/hooks')
+      end
+    end
+
+    context 'when the url points to a private network' do
+      it 'is invalid' do
+        expect_invalid_url('http://10.1.2.3/hooks')
+        expect_invalid_url('http://172.16.5.4/hooks')
+        expect_invalid_url('http://192.168.1.10/hooks')
+        expect_invalid_url('http://[fd00::1]/hooks')
+      end
+    end
+
+    context 'when the url points to a reserved destination' do
+      it 'is invalid' do
+        expect_invalid_url('http://169.254.169.254/latest/meta-data')
+        expect_invalid_url('http://[fe80::1]/hooks')
+        expect_invalid_url('http://0.0.0.0/hooks')
+        expect_invalid_url('http://[::]/hooks')
+        expect_invalid_url('http://224.0.0.1/hooks')
+        expect_invalid_url('http://100.64.1.1/hooks')
+        expect_invalid_url('http://192.0.2.10/hooks')
+        expect_invalid_url('http://198.18.0.1/hooks')
+        expect_invalid_url('http://203.0.113.10/hooks')
+        expect_invalid_url('http://240.0.0.1/hooks')
+      end
+    end
+
+    context 'when the url uses an ambiguous numeric host' do
+      it 'is invalid' do
+        expect_invalid_url('http://2130706433/hooks')
+        expect_invalid_url('http://0x7f000001/hooks')
+        expect_invalid_url('http://0x7f.0.0.1/hooks')
+        expect_invalid_url('http://127.1/hooks')
+        expect_invalid_url('http://0177.0.0.1/hooks')
+      end
+    end
+
+    context 'when the url targets an internal hostname' do
+      it 'is invalid' do
+        expect_invalid_url('http://intranet/hooks')
+        expect_invalid_url('http://billing.local/hooks')
+        expect_invalid_url('http://api.internal/hooks')
+        expect_invalid_url('http://service.lan/hooks')
+      end
+    end
+
+    context 'when the url embeds credentials' do
+      it 'is invalid' do
+        expect_invalid_url('http://user:password@example.com/hooks')
+      end
     end
 
     context 'when event_types contains a blank value' do
@@ -80,6 +149,13 @@ describe Endpoint, type: :model do
       it 'is valid' do
         expect(build(:endpoint, event_types: %w[order.created order.updated])).to be_valid
       end
+    end
+
+    def expect_invalid_url(url)
+      endpoint = build(:endpoint, url: url)
+
+      expect(endpoint).not_to be_valid, "expected #{url} to be rejected"
+      expect(endpoint.errors[:url]).to be_present
     end
   end
 
