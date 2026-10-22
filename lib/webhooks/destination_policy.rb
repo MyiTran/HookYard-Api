@@ -31,8 +31,6 @@ module Webhooks
 
     def public_ip?(value)
       address = value.is_a?(IPAddr) ? value : IPAddr.new(value.to_s)
-      address = address.native if address.ipv6? && address.ipv4_mapped?
-
       !non_public_ip?(address)
     rescue IPAddr::Error
       false
