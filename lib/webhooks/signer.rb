@@ -2,6 +2,9 @@ require 'base64'
 require 'openssl'
 
 module Webhooks
+  # Creates and verifies Standard Webhooks signatures for outbound deliveries.
+  # Uses the whsec_ key material and canonical webhook headers.
+  # Accepts legacy URL-safe encoded secrets only for backward compatibility.
   class Signer
     SECRET_PREFIX = 'whsec_'
 

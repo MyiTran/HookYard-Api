@@ -3,6 +3,9 @@ require 'resolv'
 require 'timeout'
 
 module Webhooks
+  # Resolves a validated webhook host to one pinned public IP address.
+  # Rejects DNS failures and any hostname with a non-public result.
+  # Pinning prevents a hostname from changing to an unsafe address at request time.
   class DestinationResolver
     class NotPubliclyRoutable < StandardError; end
 

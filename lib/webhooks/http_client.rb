@@ -2,6 +2,9 @@ require 'net/http'
 require 'uri'
 
 module Webhooks
+  # Sends outbound webhook POST requests through the resolver-pinned address.
+  # Applies connection/read timeouts and bounds captured response bodies.
+  # Returns transport failures as delivery results instead of raising to the job.
   class HttpClient
     class ResponseBodyLimitReached < StandardError; end
 

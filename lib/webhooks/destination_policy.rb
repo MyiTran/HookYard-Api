@@ -1,6 +1,9 @@
 require 'ipaddr'
 
 module Webhooks
+  # Centralizes validation for public webhook destinations.
+  # Rejects private, reserved, internal, and ambiguous host/IP forms.
+  # Used before endpoint delivery and after DNS resolution.
   module DestinationPolicy
     INTERNAL_HOSTNAMES = %w[localhost localhost.localdomain ip6-localhost ip6-loopback].freeze
     INTERNAL_HOSTNAME_SUFFIXES = %w[.localhost .local .internal .localdomain .home.arpa .lan .corp .home].freeze
