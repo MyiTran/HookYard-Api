@@ -10,6 +10,8 @@
 class Project < ApplicationRecord
   has_many :project_memberships, dependent: :destroy
   has_many :project_invitations, dependent: :destroy
+  has_many :project_api_credentials, dependent: :destroy
+  has_many :events, dependent: :destroy
   has_many :endpoints, dependent: :destroy
   has_many :users, through: :project_memberships
 
