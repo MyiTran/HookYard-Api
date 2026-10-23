@@ -11,7 +11,7 @@ module Webhooks
 
     NOT_ROUTABLE_MESSAGE = 'destination is not publicly routable'
 
-    def initialize(timeout: Constants::WEBHOOK_HTTP_TIMEOUT_SECONDS)
+    def initialize(timeout: Constants::WEBHOOK_DNS_RESOLUTION_TIMEOUT_SECONDS)
       @timeout = timeout
     end
 
