@@ -18,7 +18,7 @@ module Webhooks
       @resolver = resolver
     end
 
-    def post(url:, headers:, body:, timeout: Constants::WEBHOOK_HTTP_TIMEOUT_SECONDS,
+    def post(url:, headers:, body:, timeout: DeliveryPolicy::HTTP_TIMEOUT_SECONDS,
              body_limit: DeliveryAttempt::RESPONSE_BODY_MAX_BYTES)
       started_at = monotonic_time
       uri = URI.parse(url)
