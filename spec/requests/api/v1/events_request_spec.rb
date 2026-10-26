@@ -72,14 +72,14 @@ describe 'Events', type: :request do
         .to have_enqueued_job(Messages::DeliverJob).exactly(1).times
     end
 
-    it 'returns the same event for a repeated idempotency key without new messages or jobs' do
+    it 'returns the same event for a repeated idempotency key without new messages' do
       create(:endpoint, project: project, event_types: ['order.created'])
       post '/api/v1/events', params: event_attributes, headers: headers, as: :json
       first_id = JSON.parse(response.body)['id']
       clear_enqueued_jobs
 
       expect { post '/api/v1/events', params: event_attributes, headers: headers, as: :json }
-        .not_to have_enqueued_job(Messages::DeliverJob)
+        .not_to change { [Event.count, Message.count] }
 
       body = JSON.parse(response.body)
       expect(response).to have_http_status(:ok)
@@ -88,6 +88,16 @@ describe 'Events', type: :request do
       expect(body['messages_count']).to eq(0)
       expect(Event.where(project: project).count).to eq(1)
       expect(Message.count).to eq(1)
+    end
+
+    it 're-enqueues the pending messages of a repeated idempotency key' do
+      create(:endpoint, project: project, event_types: ['order.created'])
+      post '/api/v1/events', params: event_attributes, headers: headers, as: :json
+      message = Message.last
+      clear_enqueued_jobs
+
+      expect { post '/api/v1/events', params: event_attributes, headers: headers, as: :json }
+        .to have_enqueued_job(Messages::DeliverJob).with(message.id)
     end
 
     it 'rejects a reused idempotency key with different content' do

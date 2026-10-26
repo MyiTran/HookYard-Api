@@ -37,12 +37,12 @@ describe Events::Ingest, type: :operation do
     end
 
     context 'when the same request is repeated' do
-      it 'returns the existing event without creating messages or jobs' do
+      it 'returns the existing event without creating new events or messages' do
         create_list(:endpoint, 2, project: project, event_types: ['order.created'])
         first = described_class.call(project: project, attributes: attributes)
 
         expect { @duplicate = described_class.call(project: project, attributes: attributes) }
-          .not_to have_enqueued_job(Messages::DeliverJob)
+          .not_to change { [Event.count, Message.count] }
 
         expect(@duplicate.created).to be(false)
         expect(@duplicate.event).to eq(first.event)
@@ -61,6 +61,63 @@ describe Events::Ingest, type: :operation do
         end.to raise_error(ApiError::UnprocessableEntityError)
 
         expect(Event.where(project: project).count).to eq(1)
+      end
+    end
+
+    context 'when the delivery enqueue fails after the event is committed' do
+      before do
+        create(:endpoint, project: project, event_types: ['order.created'])
+        allow(Messages::DeliverJob).to receive(:perform_later).and_raise(RuntimeError, 'redis unavailable')
+        allow(Rails.logger).to receive(:error)
+      end
+
+      it 'keeps the event and its message committed' do
+        result = described_class.call(project: project, attributes: attributes)
+
+        expect(Event.where(project: project).count).to eq(1)
+        expect(Message.where(event_id: result.event.id).pluck(:status)).to eq(['pending'])
+      end
+
+      it 'logs the enqueue failure instead of raising' do
+        expect { described_class.call(project: project, attributes: attributes) }.not_to raise_error
+
+        expect(Rails.logger).to have_received(:error).with(/Webhook delivery enqueue failed/)
+      end
+    end
+
+    context 'when the same idempotency key is repeated after an enqueue failure' do
+      before do
+        create(:endpoint, project: project, event_types: ['order.created'])
+        allow(Messages::DeliverJob).to receive(:perform_later).and_raise(RuntimeError, 'redis unavailable')
+        allow(Rails.logger).to receive(:error)
+      end
+
+      it 'does not create another event or message' do
+        described_class.call(project: project, attributes: attributes)
+
+        expect { described_class.call(project: project, attributes: attributes) }
+          .not_to change { [Event.count, Message.count] }
+      end
+
+      it 're-sends the pending message through the shared enqueue path' do
+        first = described_class.call(project: project, attributes: attributes)
+        allow(Messages::DeliverJob).to receive(:perform_later).and_call_original
+        allow(Messages::EnqueueDelivery).to receive(:call).and_call_original
+
+        expect { described_class.call(project: project, attributes: attributes) }
+          .to have_enqueued_job(Messages::DeliverJob).with(first.message_ids.first)
+
+        expect(Messages::EnqueueDelivery).to have_received(:call).with(message_ids: first.message_ids)
+      end
+
+      it 'keeps the duplicate response unchanged' do
+        first = described_class.call(project: project, attributes: attributes)
+
+        duplicate = described_class.call(project: project, attributes: attributes)
+
+        expect(duplicate.created).to be(false)
+        expect(duplicate.event).to eq(first.event)
+        expect(duplicate.messages_count).to eq(0)
       end
     end
 
