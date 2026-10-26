@@ -45,9 +45,11 @@ class Message < ApplicationRecord
   has_many :delivery_attempts, -> { order(:attempt_number) }, dependent: :destroy
 
   scope :due_for_delivery, lambda { |at = Time.current|
-    pending.where('next_retry_at IS NULL OR next_retry_at <= ?', at)
+    pending.where.not(next_retry_at: nil).where(next_retry_at: ..at)
   }
-  scope :pending_before, ->(at) { pending.where(updated_at: ...at) }
+  scope :pending_without_retry_before, lambda { |at|
+    pending.where(next_retry_at: nil).where(updated_at: ...at)
+  }
   scope :with_expired_lease, lambda { |at = Time.current|
     delivering.where('delivery_lease_expires_at IS NULL OR delivery_lease_expires_at <= ?', at)
   }

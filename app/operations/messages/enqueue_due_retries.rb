@@ -1,7 +1,7 @@
 module Messages
   class EnqueueDueRetries < ApplicationOperation
     def call(now: Time.current)
-      Message.due_for_delivery(now).pluck(:id).each { |message_id| Messages::DeliverJob.perform_later(message_id) }
+      Messages::EnqueueDelivery.call(message_ids: Message.due_for_delivery(now).pluck(:id))
     end
   end
 end

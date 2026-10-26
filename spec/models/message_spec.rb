@@ -32,13 +32,25 @@ describe Message, type: :model do
   end
 
   describe '.due_for_delivery' do
-    it 'includes pending messages with no retry time or a retry time in the past' do
-      fresh = new_message
+    it 'includes pending messages whose retry time has passed' do
       due = new_message(next_retry_at: 1.minute.ago)
+      new_message
       new_message(next_retry_at: 1.minute.from_now)
       new_message(status: :succeeded)
 
-      expect(described_class.due_for_delivery).to contain_exactly(fresh, due)
+      expect(described_class.due_for_delivery).to contain_exactly(due)
+    end
+  end
+
+  describe '.pending_without_retry_before' do
+    it 'includes only pending messages that never had a retry time and are older than the cutoff' do
+      stale = new_message
+      stale.update_columns(updated_at: 2.hours.ago)
+      new_message
+      retry_waiting = new_message(next_retry_at: 1.minute.ago)
+      retry_waiting.update_columns(updated_at: 2.hours.ago)
+
+      expect(described_class.pending_without_retry_before(1.hour.ago)).to contain_exactly(stale)
     end
   end
 

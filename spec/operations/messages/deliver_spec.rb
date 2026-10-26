@@ -51,6 +51,33 @@ describe Messages::Deliver, type: :operation do
     end
   end
 
+  describe 'external text encoding' do
+    let(:binary_payload) { "binary\xFF\xFE".b }
+
+    def binary_result(status:, headers: {}, body: nil)
+      Webhooks::HttpClient::Result.new(
+        status: status, headers: headers, body: body, duration_ms: 12, error: nil, error_type: nil
+      )
+    end
+
+    it 'stores a binary receiver body as valid UTF-8' do
+      deliver(binary_result(status: 204, body: binary_payload))
+
+      expect(message.reload.status).to eq('succeeded')
+      expect(message.delivery_attempts.first.response_body).to be_valid_encoding
+    end
+
+    it 'keeps the response evidence and schedules the retry for a retryable binary response' do
+      deliver(binary_result(status: 502, headers: { 'x-trace' => [binary_payload] }, body: binary_payload))
+
+      attempt = message.delivery_attempts.first
+      expect(attempt.response_body).to be_valid_encoding
+      expect(attempt.response_headers['x-trace'].first).to be_valid_encoding
+      expect(message.reload.status).to eq('pending')
+      expect(message.next_retry_at).to be_present
+    end
+  end
+
   describe 'retryable failures' do
     {
       'a network error' => { error: 'connection refused', error_type: 'Errno::ECONNREFUSED' },
