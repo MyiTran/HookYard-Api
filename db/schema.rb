@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_10_20_120003) do
+ActiveRecord::Schema[8.0].define(version: 2026_10_26_100000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -142,7 +142,8 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_20_120003) do
     t.index ["endpoint_id"], name: "index_messages_on_endpoint_id"
     t.index ["event_id", "endpoint_id"], name: "index_messages_on_event_id_and_endpoint_id", unique: true
     t.index ["event_id"], name: "index_messages_on_event_id"
-    t.check_constraint "status::text = ANY (ARRAY['pending'::character varying, 'delivering'::character varying, 'succeeded'::character varying, 'failed'::character varying]::text[])", name: "messages_status_valid"
+    t.index ["updated_at"], name: "index_messages_on_pending_updated_at", where: "((status)::text = 'pending'::text)"
+    t.check_constraint "status::text = ANY (ARRAY['pending'::character varying::text, 'delivering'::character varying::text, 'succeeded'::character varying::text, 'failed'::character varying::text])", name: "messages_status_valid"
   end
 
   create_table "notifications", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|

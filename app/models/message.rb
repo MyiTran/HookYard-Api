@@ -15,6 +15,7 @@
 #  index_messages_on_endpoint_id_and_created_at  (endpoint_id,created_at)
 #  index_messages_on_event_id                    (event_id)
 #  index_messages_on_event_id_and_endpoint_id    (event_id,endpoint_id) UNIQUE
+#  index_messages_on_pending_updated_at          (updated_at) WHERE ((status)::text = 'pending'::text)
 #
 # Foreign Keys
 #
@@ -36,6 +37,8 @@ class Message < ApplicationRecord
   belongs_to :event
   belongs_to :endpoint
   has_many :delivery_attempts, -> { order(:attempt_number) }, dependent: :destroy
+
+  scope :pending_before, ->(at) { pending.where(updated_at: ...at) }
 
   validate :event_and_endpoint_share_project
 
