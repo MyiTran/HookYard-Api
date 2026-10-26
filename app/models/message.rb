@@ -21,6 +21,7 @@
 #  index_messages_on_endpoint_status_and_lease   (endpoint_id,status,delivery_lease_expires_at)
 #  index_messages_on_event_id                    (event_id)
 #  index_messages_on_event_id_and_endpoint_id    (event_id,endpoint_id) UNIQUE
+#  index_messages_on_pending_updated_at          (updated_at) WHERE ((status)::text = 'pending'::text)
 #  index_messages_on_status_and_next_retry_at    (status,next_retry_at)
 #
 # Foreign Keys
@@ -46,6 +47,7 @@ class Message < ApplicationRecord
   scope :due_for_delivery, lambda { |at = Time.current|
     pending.where('next_retry_at IS NULL OR next_retry_at <= ?', at)
   }
+  scope :pending_before, ->(at) { pending.where(updated_at: ...at) }
   scope :with_expired_lease, lambda { |at = Time.current|
     delivering.where('delivery_lease_expires_at IS NULL OR delivery_lease_expires_at <= ?', at)
   }

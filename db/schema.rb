@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_10_23_120000) do
+ActiveRecord::Schema[8.0].define(version: 2026_10_26_100000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -50,18 +50,6 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_23_120000) do
     t.uuid "user_id", null: false
     t.index ["jti"], name: "index_allowlisted_jwts_on_jti", unique: true
     t.index ["user_id"], name: "index_allowlisted_jwts_on_user_id"
-  end
-
-  create_table "api_credentials", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
-    t.uuid "project_id", null: false
-    t.string "name", null: false
-    t.string "token_prefix", null: false
-    t.string "token_digest", null: false
-    t.datetime "revoked_at"
-    t.datetime "created_at", null: false
-    t.datetime "updated_at", null: false
-    t.index ["project_id"], name: "index_api_credentials_on_project_id"
-    t.index ["token_digest"], name: "index_api_credentials_on_token_digest", unique: true
   end
 
   create_table "cable_tickets", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -161,6 +149,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_23_120000) do
     t.index ["event_id", "endpoint_id"], name: "index_messages_on_event_id_and_endpoint_id", unique: true
     t.index ["event_id"], name: "index_messages_on_event_id"
     t.index ["status", "next_retry_at"], name: "index_messages_on_status_and_next_retry_at"
+    t.index ["updated_at"], name: "index_messages_on_pending_updated_at", where: "((status)::text = 'pending'::text)"
     t.check_constraint "attempt_count >= 0", name: "messages_attempt_count_non_negative"
     t.check_constraint "status::text = ANY (ARRAY['pending'::character varying, 'delivering'::character varying, 'succeeded'::character varying, 'failed'::character varying]::text[])", name: "messages_status_valid"
   end
@@ -275,7 +264,6 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_23_120000) do
   add_foreign_key "active_storage_attachments", "active_storage_blobs", column: "blob_id"
   add_foreign_key "active_storage_variant_records", "active_storage_blobs", column: "blob_id"
   add_foreign_key "allowlisted_jwts", "users", on_delete: :cascade
-  add_foreign_key "api_credentials", "projects", on_delete: :cascade
   add_foreign_key "cable_tickets", "users", on_delete: :cascade
   add_foreign_key "delivery_attempts", "messages", on_delete: :cascade
   add_foreign_key "endpoint_signing_secrets", "endpoints", on_delete: :cascade

@@ -8,12 +8,16 @@ module Events
 
     def call(project:, attributes:)
       event, message_ids, created = accept(project, attributes.to_h.symbolize_keys)
-      message_ids.each { |message_id| Messages::DeliverJob.perform_later(message_id) }
+      Messages::EnqueueDelivery.call(message_ids: delivery_message_ids(event, message_ids, created))
 
       Result.new(event: event, created: created, message_ids: message_ids)
     end
 
     private
+
+    def delivery_message_ids(event, message_ids, created)
+      created ? message_ids : event.messages.pending.pluck(:id)
+    end
 
     def accept(project, attributes)
       Event.transaction do

@@ -3,4 +3,5 @@ module Constants
   UPLOADED_FILE_CONTENT_TYPES = ['image/png', 'image/jpeg'].freeze
 
   WEBHOOK_DNS_RESOLUTION_TIMEOUT_SECONDS = 5
+  WEBHOOK_DELIVERY_ENQUEUE_GRACE_SECONDS = 60
 end
