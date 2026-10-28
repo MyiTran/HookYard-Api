@@ -33,15 +33,20 @@
 #  fk_rails_...  (message_id => messages.id) ON DELETE => cascade
 #
 class DeliveryAttempt < ApplicationRecord
-  RESPONSE_BODY_MAX_BYTES = 4096
-  ERROR_MESSAGE_MAX_BYTES = 1024
+  RESPONSE_BODY_MAX_BYTES = Webhooks::ResponseEvidence::RESPONSE_BODY_MAX_BYTES
+  ERROR_MESSAGE_MAX_BYTES = Webhooks::ResponseEvidence::ERROR_MESSAGE_MAX_BYTES
   LEASE_EXPIRED_ERROR_TYPE = 'DeliveryLeaseExpired'
   LEASE_EXPIRED_MESSAGE = 'delivery lease expired before the attempt completed'
-  SENSITIVE_HEADERS = %w[set-cookie cookie authorization proxy-authenticate www-authenticate].freeze
+  SENSITIVE_HEADERS = Webhooks::ResponseEvidence::SENSITIVE_HEADERS
   EVIDENCE_FIELDS = %i[
     message_id attempt_number request_id webhook_id signing_secret_version signed_at
     request_url http_method request_headers request_body
   ].freeze
+
+  class << self
+    delegate :truncate_response_body, :truncate_error_message, :filter_headers,
+             :normalize_external_text, :normalize_header_value, to: Webhooks::ResponseEvidence
+  end
 
   belongs_to :message
 
@@ -51,31 +56,6 @@ class DeliveryAttempt < ApplicationRecord
   validates :signing_secret_version, presence: true, numericality: { only_integer: true, greater_than: 0 }
   validates :signed_at, presence: true
   validate :evidence_is_immutable, on: :update
-
-  def self.truncate_response_body(body)
-    return nil if body.nil?
-
-    normalize_external_text(body.to_s.byteslice(0, RESPONSE_BODY_MAX_BYTES))
-  end
-
-  def self.truncate_error_message(message)
-    return nil if message.nil?
-
-    normalize_external_text(message.to_s.byteslice(0, ERROR_MESSAGE_MAX_BYTES))
-  end
-
-  def self.filter_headers(headers)
-    headers.to_h.stringify_keys.except(*SENSITIVE_HEADERS)
-           .transform_values { |value| normalize_header_value(value) }
-  end
-
-  def self.normalize_external_text(value)
-    value.to_s.force_encoding(Encoding::UTF_8).scrub
-  end
-
-  def self.normalize_header_value(value)
-    value.is_a?(Array) ? value.map { |entry| normalize_external_text(entry) } : normalize_external_text(value)
-  end
 
   def succeeded?
     response_status.present? && response_status.between?(200, 299)
@@ -94,6 +74,10 @@ class DeliveryAttempt < ApplicationRecord
     return 'failed' if transport_failed? || response_status.present?
 
     'in_progress'
+  end
+
+  def failure_category
+    Webhooks::FailureCategory.for(error_type: error_type, response_status: response_status)
   end
 
   private

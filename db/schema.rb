@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_10_26_100000) do
+ActiveRecord::Schema[8.0].define(version: 2026_10_27_120200) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -52,6 +52,18 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_26_100000) do
     t.index ["user_id"], name: "index_allowlisted_jwts_on_user_id"
   end
 
+  create_table "api_credentials", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "project_id", null: false
+    t.string "name", null: false
+    t.string "token_prefix", null: false
+    t.string "token_digest", null: false
+    t.datetime "revoked_at"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["project_id"], name: "index_api_credentials_on_project_id"
+    t.index ["token_digest"], name: "index_api_credentials_on_token_digest", unique: true
+  end
+
   create_table "cable_tickets", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.uuid "user_id", null: false
     t.string "token", null: false
@@ -62,6 +74,30 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_26_100000) do
     t.index ["expires_at"], name: "index_cable_tickets_on_expires_at"
     t.index ["token"], name: "index_cable_tickets_on_token", unique: true
     t.index ["user_id"], name: "index_cable_tickets_on_user_id"
+  end
+
+  create_table "circuit_probes", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "endpoint_id", null: false
+    t.string "request_id", null: false
+    t.string "webhook_id", null: false
+    t.integer "signing_secret_version"
+    t.string "status", default: "pending", null: false
+    t.datetime "started_at", null: false
+    t.datetime "completed_at"
+    t.text "request_url", null: false
+    t.text "request_body", null: false
+    t.integer "response_status"
+    t.jsonb "response_headers"
+    t.text "response_body"
+    t.integer "duration_ms"
+    t.string "error_type"
+    t.text "error_message"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["endpoint_id", "created_at"], name: "index_circuit_probes_on_endpoint_id_and_created_at"
+    t.index ["endpoint_id", "status"], name: "index_circuit_probes_on_endpoint_id_and_status"
+    t.index ["endpoint_id"], name: "index_circuit_probes_on_endpoint_id"
+    t.check_constraint "status::text = ANY (ARRAY['pending'::character varying, 'succeeded'::character varying, 'failed'::character varying]::text[])", name: "circuit_probes_status_check"
   end
 
   create_table "delivery_attempts", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -112,9 +148,20 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_26_100000) do
     t.datetime "updated_at", null: false
     t.datetime "archived_at"
     t.string "event_types", default: [], null: false, array: true
+    t.string "circuit_state", default: "enabled", null: false
+    t.integer "circuit_failure_count", default: 0, null: false
+    t.datetime "circuit_opened_at"
+    t.datetime "circuit_next_probe_at"
+    t.datetime "circuit_probe_lease_expires_at"
+    t.integer "queued_message_count", default: 0, null: false
+    t.datetime "circuit_disable_at"
     t.index ["archived_at"], name: "index_endpoints_on_archived_at"
+    t.index ["circuit_state", "circuit_next_probe_at"], name: "index_endpoints_on_circuit_state_and_next_probe_at"
     t.index ["project_id"], name: "index_endpoints_on_project_id"
     t.check_constraint "NOT ('*'::text = ANY (event_types::text[])) OR cardinality(event_types) = 1", name: "endpoints_wildcard_subscription_exclusive"
+    t.check_constraint "circuit_failure_count >= 0", name: "endpoints_circuit_failure_count_non_negative"
+    t.check_constraint "circuit_state::text = ANY (ARRAY['enabled'::character varying, 'circuit_open'::character varying, 'disabled'::character varying]::text[])", name: "endpoints_circuit_state_valid"
+    t.check_constraint "queued_message_count >= 0", name: "endpoints_queued_message_count_non_negative"
   end
 
   create_table "events", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -132,6 +179,19 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_26_100000) do
     t.check_constraint "jsonb_typeof(payload) = 'object'::text", name: "events_payload_is_object"
   end
 
+  create_table "ingest_rejections", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "project_id", null: false
+    t.uuid "endpoint_id"
+    t.string "reason", null: false
+    t.string "event_type"
+    t.string "idempotency_key"
+    t.jsonb "payload", default: {}, null: false
+    t.datetime "created_at", null: false
+    t.index ["endpoint_id"], name: "index_ingest_rejections_on_endpoint_id"
+    t.index ["project_id", "created_at"], name: "index_ingest_rejections_on_project_id_and_created_at"
+    t.index ["project_id"], name: "index_ingest_rejections_on_project_id"
+  end
+
   create_table "messages", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.uuid "event_id", null: false
     t.uuid "endpoint_id", null: false
@@ -142,8 +202,12 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_26_100000) do
     t.datetime "next_retry_at"
     t.datetime "delivery_lease_expires_at"
     t.datetime "terminal_at"
+    t.datetime "queued_at"
+    t.datetime "held_at"
+    t.string "hold_reason"
     t.index ["delivery_lease_expires_at"], name: "index_messages_on_active_delivery_lease", where: "((status)::text = 'delivering'::text)"
     t.index ["endpoint_id", "created_at"], name: "index_messages_on_endpoint_id_and_created_at"
+    t.index ["endpoint_id", "held_at"], name: "index_messages_on_endpoint_id_and_held_at"
     t.index ["endpoint_id", "status", "delivery_lease_expires_at"], name: "index_messages_on_endpoint_status_and_lease"
     t.index ["endpoint_id"], name: "index_messages_on_endpoint_id"
     t.index ["event_id", "endpoint_id"], name: "index_messages_on_event_id_and_endpoint_id", unique: true
@@ -151,6 +215,8 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_26_100000) do
     t.index ["status", "next_retry_at"], name: "index_messages_on_status_and_next_retry_at"
     t.index ["updated_at"], name: "index_messages_on_pending_updated_at", where: "((status)::text = 'pending'::text)"
     t.check_constraint "attempt_count >= 0", name: "messages_attempt_count_non_negative"
+    t.check_constraint "hold_reason IS NULL OR (hold_reason::text = ANY (ARRAY['endpoint_circuit_open'::character varying, 'endpoint_disabled'::character varying]::text[]))", name: "messages_hold_reason_valid"
+    t.check_constraint "status::text = 'pending'::text OR held_at IS NULL AND hold_reason IS NULL", name: "messages_hold_requires_pending"
     t.check_constraint "status::text = ANY (ARRAY['pending'::character varying, 'delivering'::character varying, 'succeeded'::character varying, 'failed'::character varying]::text[])", name: "messages_status_valid"
   end
 
@@ -218,6 +284,13 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_26_100000) do
     t.string "name", null: false
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.string "plan", default: "free", null: false
+    t.integer "delivery_timeout_seconds"
+    t.integer "delivery_retry_delays_seconds", array: true
+    t.check_constraint "delivery_retry_delays_seconds IS NULL OR (0 < ALL (delivery_retry_delays_seconds))", name: "projects_delivery_retry_delays_positive"
+    t.check_constraint "delivery_retry_delays_seconds IS NULL OR cardinality(delivery_retry_delays_seconds) >= 1 AND cardinality(delivery_retry_delays_seconds) <= 7", name: "projects_delivery_retry_delays_size"
+    t.check_constraint "delivery_timeout_seconds IS NULL OR delivery_timeout_seconds >= 1 AND delivery_timeout_seconds <= 30", name: "projects_delivery_timeout_seconds_range"
+    t.check_constraint "plan::text = ANY (ARRAY['free'::character varying, 'pro'::character varying]::text[])", name: "projects_plan_valid"
   end
 
   create_table "roles", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -264,11 +337,15 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_26_100000) do
   add_foreign_key "active_storage_attachments", "active_storage_blobs", column: "blob_id"
   add_foreign_key "active_storage_variant_records", "active_storage_blobs", column: "blob_id"
   add_foreign_key "allowlisted_jwts", "users", on_delete: :cascade
+  add_foreign_key "api_credentials", "projects", on_delete: :cascade
   add_foreign_key "cable_tickets", "users", on_delete: :cascade
+  add_foreign_key "circuit_probes", "endpoints", on_delete: :cascade
   add_foreign_key "delivery_attempts", "messages", on_delete: :cascade
   add_foreign_key "endpoint_signing_secrets", "endpoints", on_delete: :cascade
   add_foreign_key "endpoints", "projects", on_delete: :cascade
   add_foreign_key "events", "projects", on_delete: :cascade
+  add_foreign_key "ingest_rejections", "endpoints", on_delete: :nullify
+  add_foreign_key "ingest_rejections", "projects", on_delete: :cascade
   add_foreign_key "messages", "endpoints", on_delete: :cascade
   add_foreign_key "messages", "events", on_delete: :cascade
   add_foreign_key "notifications", "project_invitations", on_delete: :cascade

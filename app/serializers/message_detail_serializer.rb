@@ -2,7 +2,7 @@ class MessageDetailSerializer < ApplicationSerializer
   identifier :id
 
   fields :webhook_id, :status, :created_at, :updated_at
-  fields :attempt_count, :next_retry_at, :terminal_at
+  fields :attempt_count, :next_retry_at, :terminal_at, :delivery_state
 
   field :max_attempts do
     Webhooks::DeliveryPolicy::MAX_ATTEMPTS
@@ -10,6 +10,14 @@ class MessageDetailSerializer < ApplicationSerializer
 
   field :retryable do |message|
     message.retryable?
+  end
+
+  field :hold do |message|
+    message.hold_summary
+  end
+
+  field :failure_category do |message|
+    message.delivery_attempts.last&.failure_category
   end
 
   field :event do |message|

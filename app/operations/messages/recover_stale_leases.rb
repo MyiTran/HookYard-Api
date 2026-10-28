@@ -27,9 +27,18 @@ module Messages
       return unless message.lease_expired?(now)
 
       abandon_in_progress_attempt(message)
-      return message.mark_failed!(at: now) unless message.retries_available?
+      recover_endpoint(message, now)
+    end
 
-      message.schedule_retry!(at: now + retry_delay_for(message))
+    def recover_endpoint(message, now)
+      endpoint = message.endpoint.reload
+
+      return message.hold!(reason: endpoint.circuit_hold_reason, at: now) unless endpoint.enabled?
+
+      retry_at = retry_at_for(message, now)
+      return message.mark_failed!(at: now) if retry_at.nil?
+
+      message.schedule_retry!(at: retry_at)
     end
 
     def abandon_in_progress_attempt(message)
@@ -42,8 +51,11 @@ module Messages
       )
     end
 
-    def retry_delay_for(message)
-      Webhooks::DeliveryPolicy.retry_delay([message.attempt_count, 1].max)
+    def retry_at_for(message, now)
+      return nil unless message.retries_available?
+
+      delay = Webhooks::DeliveryPolicy.retry_delay([message.attempt_count, 1].max, project: message.endpoint.project)
+      delay && now + delay
     end
   end
 end

@@ -1,12 +1,13 @@
 module ApiError
   class StandardError < ::StandardError
-    attr_reader :message, :errors, :status, :code
+    attr_reader :message, :errors, :status, :code, :headers
 
-    def initialize(message: nil, errors: [], status: nil, code: nil) # rubocop:disable Lint/MissingSuper
+    def initialize(message: nil, errors: [], status: nil, code: nil, headers: {}) # rubocop:disable Lint/MissingSuper
       @message = message
       @errors = errors
       @status = status
       @code = code
+      @headers = headers || {}
     end
 
     def to_hash
