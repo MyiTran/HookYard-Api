@@ -7,6 +7,10 @@ class DeliveryAttemptSerializer < ApplicationSerializer
          :request_url, :http_method, :request_body, :response_status, :response_headers, :response_body,
          :duration_ms, :error_type, :error_message
 
+  field :failure_category do |attempt|
+    attempt.failure_category
+  end
+
   field :request_headers do |attempt|
     attempt.request_headers.to_h.except(*REDACTED_REQUEST_HEADERS)
   end

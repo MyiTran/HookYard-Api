@@ -26,6 +26,7 @@ module ExceptionFilter
   end
 
   def render_api_error(error)
+    (error.headers || {}).each { |name, value| response.set_header(name, value) }
     render json: error, status: error.status
   end
 end

@@ -8,6 +8,7 @@ module Api
           project_id: params[:project_id],
           endpoint_id: params[:endpoint_id],
           status: params[:status],
+          delivery_state: params[:delivery_state],
           event_type: params[:event_type],
           from: params[:from],
           to: params[:to],

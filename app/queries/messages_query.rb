@@ -17,6 +17,7 @@ class MessagesQuery < ApplicationQuery
     scope = filter(scope, :by_project, params[:project_id])
     scope = filter(scope, :by_endpoint, params[:endpoint_id])
     scope = filter(scope, :by_status, params[:status])
+    scope = filter(scope, :by_delivery_state, params[:delivery_state])
     scope = filter(scope, :by_event_type, params[:event_type])
     scope = filter(scope, :by_from, params[:from])
     scope = filter(scope, :by_to, params[:to])
@@ -56,6 +57,16 @@ class MessagesQuery < ApplicationQuery
     return scope unless Message.statuses.key?(status.to_s)
 
     scope.where(status: status.to_s)
+  end
+
+  def by_delivery_state(scope, state)
+    delivery_state_scope = Message.delivery_state_scope(state)
+    return scope.merge(delivery_state_scope) if delivery_state_scope
+
+    raise ApiError::UnprocessableEntityError.new(
+      message: 'Unsupported delivery state',
+      errors: [{ field: 'delivery_state', message: 'is not supported' }]
+    )
   end
 
   def by_event_type(scope, event_type)

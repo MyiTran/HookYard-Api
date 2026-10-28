@@ -22,7 +22,8 @@ module Messages
       result = http_client.post(
         url: claim.attempt.request_url,
         headers: claim.attempt.request_headers,
-        body: claim.attempt.request_body
+        body: claim.attempt.request_body,
+        timeout: Webhooks::DeliveryPolicy.timeout_seconds_for(message.endpoint.project)
       )
       finalize(claim, result)
 
@@ -36,15 +37,25 @@ module Messages
     def claim_attempt
       message.endpoint.with_lock do
         message.reload
-        return Claim.new(outcome: :skipped) unless claimable?
-        return exhaust_attempts unless message.retries_available?
-        return reschedule_for_capacity if endpoint_at_capacity?
-
-        secret = current_secret
-        return fail_without_secret if secret.nil?
-
-        claim_with_attempt(secret)
+        claim_locked
       end
+    end
+
+    def claim_locked
+      endpoint = message.endpoint.reload
+      return Claim.new(outcome: :skipped) unless claimable?
+
+      return skip_while_not_enabled(endpoint) unless endpoint.enabled?
+      return Claim.new(outcome: :skipped) if message.held?
+      return exhaust_attempts unless message.retries_available?
+      return reschedule_for_capacity if endpoint_at_capacity?
+
+      claim_with_secret(endpoint)
+    end
+
+    def skip_while_not_enabled(endpoint)
+      message.hold!(reason: endpoint.circuit_hold_reason) unless message.held?
+      Claim.new(outcome: :skipped)
     end
 
     def claimable?
@@ -74,15 +85,13 @@ module Messages
       Claim.new(outcome: :capacity_full, retry_at: retry_at)
     end
 
-    def fail_without_secret
-      message.mark_failed!
-      Claim.new(outcome: :failed)
-    end
+    def claim_with_secret(endpoint)
+      secret = current_secret
+      return failed_claim if secret.nil?
 
-    def claim_with_attempt(secret)
       attempt_number = next_attempt_number
       attributes = build_attempt_attributes(secret, attempt_number)
-      return Claim.new(outcome: :failed) if attributes.nil?
+      return failed_claim if attributes.nil?
 
       message.mark_delivering!(
         lease_expires_at: Time.current + Webhooks::DeliveryPolicy.delivery_lease_duration,
@@ -92,6 +101,11 @@ module Messages
       attempt = message.delivery_attempts.create!(attributes)
 
       Claim.new(outcome: :claimed, attempt: attempt, lease_expires_at: lease_expires_at)
+    end
+
+    def failed_claim
+      message.mark_failed!
+      Claim.new(outcome: :failed)
     end
 
     def build_attempt_attributes(secret, attempt_number)
@@ -164,17 +178,41 @@ module Messages
 
     def finalize(claim, result)
       retry_at = nil
+      endpoint = message.endpoint
 
       DeliveryAttempt.transaction do
-        message.with_lock do
-          message.reload
-          next if superseded?(claim)
+        endpoint.with_lock do
+          recorded = record_locked(claim, result) { |value| retry_at = value }
 
-          retry_at = record_result(claim.attempt, result)
+          if recorded
+            resolve_circuit(endpoint.reload, result)
+            hold_for_open_circuit(endpoint.reload) if retry_at
+          end
         end
       end
 
-      enqueue_retry(retry_at) if retry_at
+      enqueue_retry(retry_at) if retry_at && !message.reload.held?
+    end
+
+    def hold_for_open_circuit(endpoint)
+      return if endpoint.enabled?
+
+      message.reload
+      message.hold!(reason: endpoint.circuit_hold_reason) unless message.held?
+    end
+
+    def record_locked(claim, result)
+      recorded = false
+
+      message.with_lock do
+        message.reload
+        next if superseded?(claim)
+
+        yield record_result(claim.attempt, result)
+        recorded = true
+      end
+
+      recorded
     end
 
     def superseded?(claim)
@@ -205,30 +243,53 @@ module Messages
     end
 
     def transition_after_result(result)
-      if succeeded_result?(result)
+      if Webhooks::CircuitPolicy.success?(result)
         message.mark_succeeded!
-        nil
-      elsif retryable_result?(result) && message.retries_available?
-        schedule_retry
+        return nil
+      end
+
+      retry_at = retry_at_for(result)
+      if retry_at
+        message.schedule_retry!(at: retry_at)
+        retry_at
       else
         message.mark_failed!
         nil
       end
     end
 
-    def schedule_retry
-      retry_at = Time.current + Webhooks::DeliveryPolicy.retry_delay(message.attempt_count)
-      message.schedule_retry!(at: retry_at)
+    def retry_at_for(result)
+      return nil unless retryable_result?(result) && message.retries_available?
 
-      retry_at
+      delay = Webhooks::DeliveryPolicy.retry_delay(message.attempt_count, project: project)
+      delay && Time.current + delay
     end
 
-    def succeeded_result?(result)
-      !result.error? && result.status.to_i.between?(200, 299)
+    def resolve_circuit(endpoint, result)
+      if Webhooks::CircuitPolicy.success?(result)
+        reset_circuit_failures(endpoint)
+      elsif Webhooks::CircuitPolicy.counted_failure?(result)
+        register_circuit_failure(endpoint)
+      end
+    end
+
+    def reset_circuit_failures(endpoint)
+      return unless endpoint.enabled?
+      return if endpoint.circuit_failure_count.zero?
+
+      endpoint.update!(circuit_failure_count: 0)
+    end
+
+    def register_circuit_failure(endpoint)
+      endpoint.register_circuit_failure!
     end
 
     def retryable_result?(result)
       Webhooks::DeliveryPolicy.retryable?(result)
+    end
+
+    def project
+      message.endpoint.project
     end
 
     def reschedule_after_capacity(claim)
