@@ -32,7 +32,7 @@ describe Messages::RecoverStaleLeases, type: :operation do
         described_class.call
 
         expect(message.reload.status).to eq('pending')
-        expect(message.next_retry_at).to be_between(now + 1.minute, now + (1.minute * 1.2))
+        expect(message.next_retry_at).to be_between(now + 5.seconds, now + 6.seconds)
         expect(message.delivery_lease_expires_at).to be_nil
         expect(message.terminal_at).to be_nil
       end
@@ -58,12 +58,46 @@ describe Messages::RecoverStaleLeases, type: :operation do
 
         described_class.call
 
-        expect(message.reload.next_retry_at).to be_between(now + 15.minutes, now + (15.minutes * 1.2))
+        expect(message.reload.next_retry_at).to be_between(now + 30.minutes, now + 36.minutes)
+      end
+
+      it 'never counts the lease expiry toward the circuit failures' do
+        described_class.call
+
+        expect(endpoint.reload.circuit_failure_count).to eq(0)
+        expect(endpoint).to be_enabled
+      end
+    end
+
+    context 'when the circuit is open for the endpoint' do
+      before do
+        endpoint.update!(
+          circuit_state: 'circuit_open',
+          circuit_failure_count: 5,
+          circuit_opened_at: now,
+          circuit_next_probe_at: now + 1.minute,
+          circuit_probe_lease_expires_at: now + 1.minute
+        )
+        start_delivery(message, attempt_count: 1, lease_expires_at: 1.minute.ago)
+      end
+
+      it 'holds the recovered message without touching the probe lease or counters' do
+        described_class.call
+
+        message.reload
+        endpoint.reload
+        expect(message.status).to eq('pending')
+        expect(message.hold_reason).to eq('endpoint_circuit_open')
+        expect(message.next_retry_at).to be_nil
+        expect(message.delivery_attempts.first.error_type).to eq(DeliveryAttempt::LEASE_EXPIRED_ERROR_TYPE)
+        expect(endpoint.circuit_failure_count).to eq(5)
+        expect(endpoint.circuit_probe_lease_expires_at).to eq(now + 1.minute)
+        expect(endpoint).to be_circuit_open
       end
     end
 
     context 'when the lease expired on the final attempt' do
-      before { start_delivery(message, attempt_count: 5, lease_expires_at: 1.minute.ago) }
+      before { start_delivery(message, attempt_count: 8, lease_expires_at: 1.minute.ago) }
 
       it 'terminally fails the message and releases the lease' do
         described_class.call
