@@ -35,6 +35,8 @@
 class DeliveryAttempt < ApplicationRecord
   RESPONSE_BODY_MAX_BYTES = 4096
   ERROR_MESSAGE_MAX_BYTES = 1024
+  LEASE_EXPIRED_ERROR_TYPE = 'DeliveryLeaseExpired'
+  LEASE_EXPIRED_MESSAGE = 'delivery lease expired before the attempt completed'
   SENSITIVE_HEADERS = %w[set-cookie cookie authorization proxy-authenticate www-authenticate].freeze
   EVIDENCE_FIELDS = %i[
     message_id attempt_number request_id webhook_id signing_secret_version signed_at
@@ -81,6 +83,10 @@ class DeliveryAttempt < ApplicationRecord
 
   def transport_failed?
     error_type.present?
+  end
+
+  def completed?
+    response_status.present? || error_type.present?
   end
 
   def status

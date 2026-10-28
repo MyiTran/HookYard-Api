@@ -2,13 +2,18 @@ class MessageSerializer < ApplicationSerializer
   identifier :id
 
   fields :webhook_id, :status, :event_id, :created_at, :updated_at
+  fields :attempt_count, :next_retry_at, :terminal_at
 
   field :event_type do |message|
     message.event.event_type
   end
 
-  field :attempt_count do |message|
-    message.attempt_count || 0
+  field :max_attempts do
+    Webhooks::DeliveryPolicy::MAX_ATTEMPTS
+  end
+
+  field :retryable do |message|
+    message.retryable?
   end
 
   fields :last_attempt_at, :last_response_status, :last_duration_ms, :last_error_type

@@ -34,6 +34,7 @@ describe EndpointMessagesQuery do
       message = create(:message, event: event, endpoint: endpoint)
       create(:delivery_attempt, message: message, attempt_number: 1, response_status: 500, duration_ms: 30)
       latest = create(:delivery_attempt, message: message, attempt_number: 2, response_status: 200, duration_ms: 12)
+      message.update_columns(attempt_count: 2)
 
       row = results.first
 
@@ -48,6 +49,8 @@ describe EndpointMessagesQuery do
       message = create(:message, event: event, endpoint: endpoint)
       create(:delivery_attempt, message: message, attempt_number: 1, response_status: 200, duration_ms: 12)
       create(:delivery_attempt, message: message, attempt_number: 2, error_type: 'Net::OpenTimeout', duration_ms: 10_000)
+
+      message.update_columns(attempt_count: 2)
 
       row = results.first
 
