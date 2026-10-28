@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_10_16_140000) do
+ActiveRecord::Schema[8.0].define(version: 2026_10_26_100000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -64,6 +64,32 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_16_140000) do
     t.index ["user_id"], name: "index_cable_tickets_on_user_id"
   end
 
+  create_table "delivery_attempts", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "message_id", null: false
+    t.integer "attempt_number", default: 1, null: false
+    t.string "request_id", null: false
+    t.string "webhook_id", null: false
+    t.integer "signing_secret_version", null: false
+    t.datetime "signed_at", null: false
+    t.text "request_url", null: false
+    t.string "http_method", default: "POST", null: false
+    t.jsonb "request_headers", default: {}, null: false
+    t.text "request_body", null: false
+    t.integer "response_status"
+    t.jsonb "response_headers"
+    t.text "response_body"
+    t.integer "duration_ms"
+    t.string "error_type"
+    t.text "error_message"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["message_id", "attempt_number"], name: "index_delivery_attempts_on_message_id_and_attempt_number", unique: true
+    t.index ["message_id", "created_at"], name: "index_delivery_attempts_on_message_id_and_created_at"
+    t.index ["message_id"], name: "index_delivery_attempts_on_message_id"
+    t.check_constraint "response_status IS NULL OR response_status >= 100 AND response_status <= 599", name: "delivery_attempts_response_status_range"
+    t.check_constraint "signing_secret_version > 0", name: "delivery_attempts_signing_secret_version_positive"
+  end
+
   create_table "endpoint_signing_secrets", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.uuid "endpoint_id", null: false
     t.integer "version", null: false
@@ -91,6 +117,35 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_16_140000) do
     t.check_constraint "NOT ('*'::text = ANY (event_types::text[])) OR cardinality(event_types) = 1", name: "endpoints_wildcard_subscription_exclusive"
   end
 
+  create_table "events", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "project_id", null: false
+    t.string "event_type", null: false
+    t.jsonb "payload", default: {}, null: false
+    t.string "idempotency_key", null: false
+    t.string "idempotency_fingerprint", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["project_id", "created_at"], name: "index_events_on_project_id_and_created_at"
+    t.index ["project_id", "idempotency_key"], name: "index_events_on_project_id_and_idempotency_key", unique: true
+    t.index ["project_id"], name: "index_events_on_project_id"
+    t.check_constraint "char_length(idempotency_key::text) >= 1 AND char_length(idempotency_key::text) <= 255", name: "events_idempotency_key_length"
+    t.check_constraint "jsonb_typeof(payload) = 'object'::text", name: "events_payload_is_object"
+  end
+
+  create_table "messages", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "event_id", null: false
+    t.uuid "endpoint_id", null: false
+    t.string "status", default: "pending", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["endpoint_id", "created_at"], name: "index_messages_on_endpoint_id_and_created_at"
+    t.index ["endpoint_id"], name: "index_messages_on_endpoint_id"
+    t.index ["event_id", "endpoint_id"], name: "index_messages_on_event_id_and_endpoint_id", unique: true
+    t.index ["event_id"], name: "index_messages_on_event_id"
+    t.index ["updated_at"], name: "index_messages_on_pending_updated_at", where: "((status)::text = 'pending'::text)"
+    t.check_constraint "status::text = ANY (ARRAY['pending'::character varying::text, 'delivering'::character varying::text, 'succeeded'::character varying::text, 'failed'::character varying::text])", name: "messages_status_valid"
+  end
+
   create_table "notifications", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.uuid "user_id", null: false
     t.uuid "actor_id"
@@ -108,6 +163,18 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_16_140000) do
     t.index ["project_invitation_id"], name: "index_notifications_on_project_invitation_id"
     t.index ["user_id", "created_at"], name: "index_notifications_on_user_id_and_created_at"
     t.index ["user_id"], name: "index_notifications_on_user_id"
+  end
+
+  create_table "project_api_credentials", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "project_id", null: false
+    t.string "name", null: false
+    t.string "token_digest", null: false
+    t.string "token_hint", null: false
+    t.datetime "revoked_at"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["project_id"], name: "index_project_api_credentials_on_project_id"
+    t.index ["token_digest"], name: "index_project_api_credentials_on_token_digest", unique: true
   end
 
   create_table "project_invitations", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -190,12 +257,17 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_16_140000) do
   add_foreign_key "active_storage_variant_records", "active_storage_blobs", column: "blob_id"
   add_foreign_key "allowlisted_jwts", "users", on_delete: :cascade
   add_foreign_key "cable_tickets", "users", on_delete: :cascade
+  add_foreign_key "delivery_attempts", "messages", on_delete: :cascade
   add_foreign_key "endpoint_signing_secrets", "endpoints", on_delete: :cascade
   add_foreign_key "endpoints", "projects", on_delete: :cascade
+  add_foreign_key "events", "projects", on_delete: :cascade
+  add_foreign_key "messages", "endpoints", on_delete: :cascade
+  add_foreign_key "messages", "events", on_delete: :cascade
   add_foreign_key "notifications", "project_invitations", on_delete: :cascade
   add_foreign_key "notifications", "projects", on_delete: :cascade
   add_foreign_key "notifications", "users", column: "actor_id", on_delete: :cascade
   add_foreign_key "notifications", "users", on_delete: :cascade
+  add_foreign_key "project_api_credentials", "projects", on_delete: :cascade
   add_foreign_key "project_invitations", "projects", on_delete: :cascade
   add_foreign_key "project_invitations", "users", column: "invited_by_id", on_delete: :cascade
   add_foreign_key "project_invitations", "users", column: "recipient_id", on_delete: :cascade

@@ -7,3 +7,8 @@ purge_expired_jwts_job:
   cron: '0 0 * * *'
   class: 'DeviseJwt::PurgeExpiredJwtsJob'
   queue: default
+
+recover_pending_webhook_deliveries:
+  cron: '* * * * *'
+  class: 'Messages::PendingDeliveryRecoveryJob'
+  queue: default
