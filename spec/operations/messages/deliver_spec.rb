@@ -228,8 +228,8 @@ describe Messages::Deliver, type: :operation do
       expect(message.next_retry_at).to be_between(Time.current + 30.minutes, Time.current + (30.minutes * 1.2))
     end
 
-    it 'follows the whole eight attempt lifecycle before giving up' do
-      allow(http_client).to receive(:post).and_return(http_result(status: 503))
+    it 'follows the whole eight attempt lifecycle on HTTP 500 before giving up' do
+      allow(http_client).to receive(:post).and_return(http_result(status: 500))
 
       (Webhooks::DeliveryPolicy::MAX_ATTEMPTS - 1).times do |index|
         operation.call(message: message)
@@ -269,6 +269,83 @@ describe Messages::Deliver, type: :operation do
 
       expect(http_client).to have_received(:post).once
       expect(message.delivery_attempts.count).to eq(1)
+    end
+  end
+
+  describe 'destination resolution' do
+    let(:resolver) { double('resolver') }
+    let(:operation) { described_class.new(http_client: Webhooks::HttpClient.new(resolver: resolver), signer: signer) }
+
+    context 'when the dns lookup times out' do
+      before { allow(resolver).to receive(:resolve).and_raise(Webhooks::DestinationResolver::ResolutionFailed) }
+
+      it 'retries the message on the schedule' do
+        operation.call(message: message)
+
+        message.reload
+        expect(message.status).to eq('pending')
+        expect(message.attempt_count).to eq(1)
+        expect(message.next_retry_at).to be_between(Time.current + 5.seconds, Time.current + (5.seconds * 1.2))
+      end
+
+      it 'records the resolution failure on the attempt' do
+        operation.call(message: message)
+
+        attempt = message.reload.delivery_attempts.first
+        expect(attempt.error_type).to eq('Webhooks::DestinationResolver::ResolutionFailed')
+        expect(attempt.response_status).to be_nil
+      end
+    end
+
+    context 'when the dns resolver reports an error' do
+      it 'retries the message on the schedule' do
+        allow(resolver).to receive(:resolve)
+          .and_raise(Webhooks::DestinationResolver::ResolutionFailed.new('destination resolution failed'))
+
+        operation.call(message: message)
+
+        message.reload
+        expect(message.status).to eq('pending')
+        expect(message.next_retry_at).to be_between(Time.current + 5.seconds, Time.current + (5.seconds * 1.2))
+      end
+    end
+
+    context 'when the dns lookup returns no address' do
+      it 'retries the message on the schedule' do
+        allow(resolver).to receive(:resolve).and_raise(Webhooks::DestinationResolver::ResolutionFailed)
+
+        operation.call(message: message)
+
+        expect(message.reload.status).to eq('pending')
+      end
+    end
+
+    context 'when the destination is not publicly routable' do
+      before { allow(resolver).to receive(:resolve).and_raise(Webhooks::DestinationResolver::NotPubliclyRoutable) }
+
+      it 'terminally fails the message without a retry' do
+        operation.call(message: message)
+
+        message.reload
+        expect(message.status).to eq('failed')
+        expect(message.attempt_count).to eq(1)
+        expect(message.next_retry_at).to be_nil
+        expect(message.terminal_at).to eq(Time.current)
+        expect(message.delivery_attempts.first.error_type)
+          .to eq('Webhooks::DestinationResolver::NotPubliclyRoutable')
+      end
+
+      it 'still resolves the destination before every retried attempt' do
+        allow(resolver).to receive(:resolve).and_raise(Webhooks::DestinationResolver::NotPubliclyRoutable)
+
+        operation.call(message: message)
+
+        message.update_columns(next_retry_at: 1.minute.ago)
+        operation.call(message: message)
+
+        expect(resolver).to have_received(:resolve).once
+        expect(message.reload.attempt_count).to eq(1)
+      end
     end
   end
 

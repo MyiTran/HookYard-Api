@@ -37,6 +37,7 @@ module Webhooks
       Errno::EPIPE
       Errno::ETIMEDOUT
       SocketError
+      Webhooks::DestinationResolver::ResolutionFailed
       OpenSSL::SSL::SSLError
       IOError
       EOFError

@@ -91,6 +91,10 @@ describe Webhooks::DeliveryPolicy, type: :model do
       end
     end
 
+    it 'retries transient destination resolution failures' do
+      expect(described_class.retryable_error?('Webhooks::DestinationResolver::ResolutionFailed')).to be(true)
+    end
+
     it 'does not retry security, signing or malformed destination errors' do
       %w[Webhooks::DestinationResolver::NotPubliclyRoutable URI::InvalidURIError
          ArgumentError Webhooks::Signer::InvalidSecret].each do |error_type|

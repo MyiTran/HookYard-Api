@@ -46,6 +46,18 @@ describe Webhooks::HttpClient do
       end
     end
 
+    context 'when the dns lookup fails' do
+      it 'reports a transient resolution failure without opening a connection' do
+        allow(Resolv).to receive(:getaddresses).with('hooks.example.com').and_raise(Resolv::ResolvError)
+        expect(Net::HTTP).not_to receive(:new)
+
+        result = post
+
+        expect(result).to be_error
+        expect(result.error_type).to eq('Webhooks::DestinationResolver::ResolutionFailed')
+      end
+    end
+
     context 'when the hostname resolves to both public and private addresses' do
       it 'rejects the destination before the connection is attempted' do
         allow(Resolv).to receive(:getaddresses).with('hooks.example.com')
