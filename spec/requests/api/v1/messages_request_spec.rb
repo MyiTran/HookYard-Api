@@ -126,7 +126,7 @@ describe 'Messages', type: :request do
       entry = JSON.parse(response.body)['data'].first
       expect(entry).to include(
         'attempt_count' => 2,
-        'max_attempts' => Webhooks::DeliveryPolicy::MAX_ATTEMPTS,
+        'max_attempts' => 8,
         'retryable' => true
       )
       expect(entry['next_retry_at']).to be_present
@@ -261,7 +261,7 @@ describe 'Messages', type: :request do
         expect(json_response['id']).to eq(message.id)
         expect(json_response).to include(
           'attempt_count' => 1,
-          'max_attempts' => Webhooks::DeliveryPolicy::MAX_ATTEMPTS,
+          'max_attempts' => 8,
           'status' => 'pending',
           'retryable' => true
         )
@@ -303,7 +303,7 @@ describe 'Messages', type: :request do
       expect(json_response['data'].map { |entry| entry['id'] }).to contain_exactly(message.id)
       expect(json_response['data'].first).to include(
         'attempt_count' => 1,
-        'max_attempts' => Webhooks::DeliveryPolicy::MAX_ATTEMPTS
+        'max_attempts' => 8
       )
     end
   end

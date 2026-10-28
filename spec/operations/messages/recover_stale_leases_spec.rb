@@ -32,7 +32,7 @@ describe Messages::RecoverStaleLeases, type: :operation do
         described_class.call
 
         expect(message.reload.status).to eq('pending')
-        expect(message.next_retry_at).to be_between(now + 1.minute, now + (1.minute * 1.2))
+        expect(message.next_retry_at).to be_between(now + 5.seconds, now + (5.seconds * 1.2))
         expect(message.delivery_lease_expires_at).to be_nil
         expect(message.terminal_at).to be_nil
       end
@@ -55,15 +55,22 @@ describe Messages::RecoverStaleLeases, type: :operation do
 
       it 'uses the retry schedule matching the attempts already made' do
         message.update_columns(attempt_count: 3)
+        third_delay = Webhooks::DeliveryPolicy::RETRY_DELAYS[2]
 
         described_class.call
 
-        expect(message.reload.next_retry_at).to be_between(now + 15.minutes, now + (15.minutes * 1.2))
+        expect(message.reload.next_retry_at).to be_between(now + third_delay, now + (third_delay * 1.2))
       end
     end
 
     context 'when the lease expired on the final attempt' do
-      before { start_delivery(message, attempt_count: 5, lease_expires_at: 1.minute.ago) }
+      before do
+        start_delivery(
+          message,
+          attempt_count: Webhooks::DeliveryPolicy::MAX_ATTEMPTS,
+          lease_expires_at: 1.minute.ago
+        )
+      end
 
       it 'terminally fails the message and releases the lease' do
         described_class.call

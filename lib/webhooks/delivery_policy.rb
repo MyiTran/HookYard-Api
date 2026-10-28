@@ -4,8 +4,20 @@ module Webhooks
   # predictable across workers and restarts.
   class DeliveryPolicy
     HTTP_TIMEOUT_SECONDS = 15
-    MAX_ATTEMPTS = 5
-    RETRY_DELAYS = [1.minute, 5.minutes, 15.minutes, 60.minutes].freeze
+    MAX_ATTEMPTS = 8
+
+    # Delay inserted after the given attempt: attempt 1 is immediate, so the
+    # first retry waits 5 seconds and the last retry waits 10 hours.
+    RETRY_DELAYS = [
+      5.seconds,
+      5.minutes,
+      30.minutes,
+      2.hours,
+      5.hours,
+      10.hours,
+      10.hours
+    ].freeze
+
     JITTER_RATIO = 0.2
     MAX_ACTIVE_DELIVERIES_PER_ENDPOINT = 3
     CAPACITY_RETRY_DELAY = 15.seconds
@@ -49,7 +61,7 @@ module Webhooks
       end
 
       def retry_delay(attempts_made)
-        return nil if attempts_made >= MAX_ATTEMPTS
+        return nil if attempts_made < 1 || attempts_made >= MAX_ATTEMPTS
 
         base_delay = RETRY_DELAYS[attempts_made - 1]
         return nil if base_delay.nil?

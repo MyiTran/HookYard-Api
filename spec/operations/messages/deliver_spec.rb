@@ -201,7 +201,7 @@ describe Messages::Deliver, type: :operation do
         expect(message.attempt_count).to eq(1)
         expect(message.terminal_at).to be_nil
         expect(message.delivery_lease_expires_at).to be_nil
-        expect(message.next_retry_at).to be_between(Time.current + 1.minute, Time.current + (1.minute * 1.2))
+        expect(message.next_retry_at).to be_between(Time.current + 5.seconds, Time.current + (5.seconds * 1.2))
         expect(message.delivery_attempts.one?).to be(true)
         expect(message.delivery_attempts.first.status).to eq('failed')
       end
@@ -224,7 +224,32 @@ describe Messages::Deliver, type: :operation do
 
       deliver(http_result(status: 500))
 
-      expect(message.reload.next_retry_at).to be_between(Time.current + 15.minutes, Time.current + (15.minutes * 1.2))
+      expect(message.reload.attempt_count).to eq(3)
+      expect(message.next_retry_at).to be_between(Time.current + 30.minutes, Time.current + (30.minutes * 1.2))
+    end
+
+    it 'follows the whole eight attempt lifecycle before giving up' do
+      allow(http_client).to receive(:post).and_return(http_result(status: 503))
+
+      (Webhooks::DeliveryPolicy::MAX_ATTEMPTS - 1).times do |index|
+        operation.call(message: message)
+
+        message.reload
+        expect(message.attempt_count).to eq(index + 1)
+        expect(message.status).to eq('pending')
+
+        expected_delay = Webhooks::DeliveryPolicy::RETRY_DELAYS[index]
+        expect(message.next_retry_at).to be_between(Time.current + expected_delay, Time.current + (expected_delay * 1.2))
+        travel(expected_delay * 1.2 + 1.minute)
+      end
+
+      operation.call(message: message)
+
+      message.reload
+      expect(message.attempt_count).to eq(8)
+      expect(message.status).to eq('failed')
+      expect(message.next_retry_at).to be_nil
+      expect(message.delivery_attempts.count).to eq(8)
     end
 
     it 'enqueues the next delivery for the retry time' do
@@ -303,6 +328,7 @@ describe Messages::Deliver, type: :operation do
 
       deliver(http_result(status: 503))
 
+      expect(Webhooks::DeliveryPolicy::MAX_ATTEMPTS).to eq(8)
       expect(message.reload.status).to eq('failed')
       expect(message.attempt_count).to eq(Webhooks::DeliveryPolicy::MAX_ATTEMPTS)
       expect(message.next_retry_at).to be_nil

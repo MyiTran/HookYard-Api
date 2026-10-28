@@ -2,11 +2,23 @@ require 'rails_helper'
 
 describe Webhooks::DeliveryPolicy, type: :model do
   describe '.retry_delay' do
-    it 'returns the jittered schedule for every retryable attempt' do
-      expect(described_class.retry_delay(1)).to be_between(1.minute, 1.minute * 1.2)
-      expect(described_class.retry_delay(2)).to be_between(5.minutes, 5.minutes * 1.2)
-      expect(described_class.retry_delay(3)).to be_between(15.minutes, 15.minutes * 1.2)
-      expect(described_class.retry_delay(4)).to be_between(60.minutes, 60.minutes * 1.2)
+    {
+      1 => 5.seconds,
+      2 => 5.minutes,
+      3 => 30.minutes,
+      4 => 2.hours,
+      5 => 5.hours,
+      6 => 10.hours,
+      7 => 10.hours
+    }.each do |attempts_made, base_delay|
+      it "waits about #{base_delay.inspect} after attempt #{attempts_made}" do
+        expect(described_class.retry_delay(attempts_made)).to be_between(base_delay, base_delay * 1.2)
+      end
+    end
+
+    it 'schedules the whole eight attempt lifecycle' do
+      expect(described_class::MAX_ATTEMPTS).to eq(8)
+      expect(described_class::RETRY_DELAYS.size).to eq(described_class::MAX_ATTEMPTS - 1)
     end
 
     it 'never returns a delay earlier than the base schedule' do
@@ -24,6 +36,22 @@ describe Webhooks::DeliveryPolicy, type: :model do
     it 'returns nil once every attempt has been used' do
       expect(described_class.retry_delay(described_class::MAX_ATTEMPTS)).to be_nil
       expect(described_class.retry_delay(described_class::MAX_ATTEMPTS + 1)).to be_nil
+    end
+
+    it 'returns nil for a non positive attempt count' do
+      expect(described_class.retry_delay(0)).to be_nil
+      expect(described_class.retry_delay(-1)).to be_nil
+    end
+  end
+
+  describe 'delivery timing' do
+    it 'allows a 15 second http timeout by default' do
+      expect(described_class::HTTP_TIMEOUT_SECONDS).to eq(15)
+      expect(described_class.delivery_lease_duration).to eq(60.seconds)
+    end
+
+    it 'allows three concurrent deliveries per endpoint' do
+      expect(described_class::MAX_ACTIVE_DELIVERIES_PER_ENDPOINT).to eq(3)
     end
   end
 
