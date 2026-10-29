@@ -32,7 +32,7 @@ Rails.application.routes.draw do
 
       resource :cable_ticket, only: %i[create]
 
-      resource :account, only: [] do
+      resource :account, only: %i[show] do
         patch :plan
       end
 

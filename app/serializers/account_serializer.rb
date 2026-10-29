@@ -15,6 +15,17 @@ class AccountSerializer < ApplicationSerializer
     Plans::Entitlements.monthly_delivery_limit(account)
   end
 
+  field :available_plans do
+    Plans::Entitlements::DEFINITIONS.map do |plan, definition|
+      {
+        plan: plan,
+        project_limit: definition.project_limit,
+        endpoint_limit_per_project: definition.endpoint_limit,
+        monthly_delivery_limit: definition.monthly_delivery_limit
+      }
+    end
+  end
+
   field :usage do |account|
     limit = Plans::Entitlements.monthly_delivery_limit(account)
     used = account.deliveries_used_in_period
