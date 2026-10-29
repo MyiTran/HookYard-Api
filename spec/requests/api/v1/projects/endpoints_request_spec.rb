@@ -568,4 +568,250 @@ describe 'Projects::Endpoints', type: :request do
       expect(filter.filter(secret: 'raw-secret-value')[:secret]).to eq('[FILTERED]')
     end
   end
+
+  describe 'circuit and queue representation' do
+    it 'exposes the circuit and queue contract for an enabled endpoint' do
+      endpoint = create(:endpoint, project: project)
+
+      get "/api/v1/projects/#{project.id}/endpoints/#{endpoint.id}", headers: auth_headers(owner)
+
+      expect(response).to have_http_status(:ok)
+      expect(json_response['circuit']).to eq(
+        'state' => 'enabled',
+        'opened_at' => nil,
+        'failure_count' => 0,
+        'failure_threshold' => 5,
+        'disable_window_ends_at' => nil,
+        'next_probe_at' => nil,
+        'probe_in_flight' => false,
+        'held_message_count' => 0,
+        'last_probe' => nil
+      )
+      expect(json_response['queue']).to eq(
+        'state' => 'ok',
+        'queued_count' => 0,
+        'capacity' => 10_000
+      )
+    end
+
+    it 'exposes the open circuit tracking data and held message count' do
+      opened_at = Time.zone.local(2026, 1, 1, 12, 0, 0)
+      endpoint = create(:endpoint, project: project)
+      endpoint.update!(
+        circuit_state: 'circuit_open',
+        circuit_failure_count: 5,
+        circuit_opened_at: opened_at,
+        circuit_disable_at: opened_at + 5.days,
+        circuit_next_probe_at: opened_at + 1.minute,
+        circuit_probe_lease_expires_at: opened_at + 1.minute,
+        queued_message_count: 9_000
+      )
+      create(:message, project: project, endpoint: endpoint).update_columns(
+        queued_at: opened_at, held_at: opened_at, hold_reason: 'endpoint_circuit_open'
+      )
+
+      travel_to(opened_at + 30.seconds) do
+        get "/api/v1/projects/#{project.id}/endpoints/#{endpoint.id}", headers: auth_headers(owner)
+      end
+
+      circuit = json_response['circuit']
+      expect(circuit['state']).to eq('circuit_open')
+      expect(circuit['failure_count']).to eq(5)
+      expect(circuit['probe_in_flight']).to be(true)
+      expect(circuit['held_message_count']).to eq(1)
+      expect(Time.zone.parse(circuit['disable_window_ends_at'])).to eq(opened_at + 5.days)
+      expect(json_response['queue']).to eq('state' => 'warning', 'queued_count' => 9_000, 'capacity' => 10_000)
+      expect(json_response.keys).not_to include('circuit_probe_lease_expires_at')
+    end
+
+    it 'keeps the persisted deadline stable when the environment changes between processes' do
+      endpoint = create(:endpoint, project: project)
+      opened_at = Time.zone.local(2026, 1, 1, 12, 0, 0)
+      endpoint.open_circuit!(at: opened_at)
+
+      ENV['WEBHOOK_CIRCUIT_DISABLE_WINDOW_SECONDS'] = '5'
+      get "/api/v1/projects/#{project.id}/endpoints/#{endpoint.id}", headers: auth_headers(owner)
+      api_deadline = json_response['circuit']['disable_window_ends_at']
+
+      ENV.delete('WEBHOOK_CIRCUIT_DISABLE_WINDOW_SECONDS')
+      get "/api/v1/projects/#{project.id}/endpoints/#{endpoint.id}", headers: auth_headers(owner)
+
+      expect(Time.zone.parse(api_deadline)).to eq(opened_at + 5.days)
+      expect(json_response['circuit']['disable_window_ends_at']).to eq(api_deadline)
+      expect(endpoint.reload.circuit_disable_at).to eq(opened_at + 5.days)
+    end
+
+    it 'exposes the latest synthetic probe evidence without lease internals' do
+      endpoint = create(:endpoint, project: project)
+      probe = endpoint.circuit_probes.create!(
+        request_id: 'probe_request',
+        webhook_id: 'probe_webhook',
+        signing_secret_version: 1,
+        started_at: Time.zone.local(2026, 1, 1, 12, 0, 0),
+        request_url: endpoint.url,
+        request_body: '{}',
+        status: :failed,
+        completed_at: Time.zone.local(2026, 1, 1, 12, 0, 1),
+        response_status: 500,
+        duration_ms: 42
+      )
+
+      get "/api/v1/projects/#{project.id}/endpoints/#{endpoint.id}", headers: auth_headers(owner)
+
+      last_probe = json_response['circuit']['last_probe']
+      expect(last_probe['id']).to eq(probe.id)
+      expect(last_probe['status']).to eq('failed')
+      expect(last_probe['response_status']).to eq(500)
+      expect(last_probe['webhook_id']).to eq('probe_webhook')
+      expect(last_probe).not_to include('request_body')
+      expect(response.body).not_to include('webhook-signature')
+    end
+
+    it 'never exposes the circuit environment configuration' do
+      endpoint = create(:endpoint, project: project)
+
+      get "/api/v1/projects/#{project.id}/endpoints/#{endpoint.id}", headers: auth_headers(owner)
+
+      expect(response.body).not_to include(Webhooks::CircuitPolicy::DISABLE_WINDOW_ENV)
+      expect(response.body).not_to include(Webhooks::CircuitPolicy::PROBE_INTERVAL_ENV)
+    end
+  end
+
+  describe 'POST /api/v1/projects/:project_id/endpoints/:id/re_enable' do
+    def re_enable(target = endpoint)
+      post "/api/v1/projects/#{project.id}/endpoints/#{target.id}/re_enable", headers: auth_headers(owner)
+    end
+
+    let(:endpoint) { create(:endpoint, project: project) }
+
+    context 'when the endpoint circuit is disabled' do
+      before do
+        endpoint.update!(
+          circuit_state: 'disabled',
+          circuit_failure_count: 5,
+          circuit_opened_at: 1.hour.ago,
+          circuit_disable_at: 1.hour.ago + 5.days
+        )
+      end
+
+      it 'lets the owner re-enable the endpoint and releases held messages' do
+        message = create(:message, project: project, endpoint: endpoint)
+        message.update_columns(held_at: Time.current, hold_reason: 'endpoint_disabled')
+
+        re_enable
+
+        expect(response).to have_http_status(:ok)
+        expect(json_response['circuit']['state']).to eq('enabled')
+        expect(json_response['circuit']['failure_count']).to eq(0)
+        expect(json_response['circuit']['disable_window_ends_at']).to be_nil
+        expect(endpoint.reload).to be_enabled
+        expect(message.reload.held_at).to be_nil
+      end
+
+      it 'keeps the manual pause flag untouched' do
+        endpoint.update!(active: false)
+
+        re_enable
+
+        expect(response).to have_http_status(:ok)
+        expect(endpoint.reload.active).to be(false)
+        expect(endpoint).to be_enabled
+      end
+    end
+
+    context 'when the endpoint circuit is open' do
+      before do
+        endpoint.update!(
+          circuit_state: 'circuit_open',
+          circuit_failure_count: 5,
+          circuit_opened_at: Time.current,
+          circuit_disable_at: Time.current + 5.days,
+          circuit_next_probe_at: Time.current
+        )
+      end
+
+      it 'rejects the request with the standard validation error' do
+        message = create(:message, project: project, endpoint: endpoint)
+        message.update_columns(held_at: Time.current, hold_reason: 'endpoint_circuit_open')
+
+        re_enable
+
+        expect(response).to have_http_status(:unprocessable_entity)
+        expect(json_response['message']).to eq(Endpoints::ReEnable::CIRCUIT_OPEN_MESSAGE)
+        expect(json_response['status']).to eq(422)
+        expect(json_response.keys).to contain_exactly('message', 'status')
+
+        endpoint.reload
+        expect(endpoint).to be_circuit_open
+        expect(endpoint.circuit_failure_count).to eq(5)
+        expect(endpoint.circuit_opened_at).to be_present
+        expect(endpoint.circuit_next_probe_at).to be_present
+        expect(message.reload.held_at).to be_present
+        expect(message.hold_reason).to eq('endpoint_circuit_open')
+        expect(ActiveJob::Base.queue_adapter.enqueued_jobs.select { |job| job[:job] == Messages::DeliverJob }).to be_empty
+      end
+
+      it 'keeps the manual pause flag untouched' do
+        endpoint.update!(active: false)
+
+        re_enable
+
+        expect(response).to have_http_status(:unprocessable_entity)
+        expect(endpoint.reload.active).to be(false)
+      end
+    end
+
+    context 'when the endpoint is already enabled' do
+      it 'is idempotent and answers with the enabled circuit' do
+        endpoint.update!(circuit_failure_count: 2)
+
+        re_enable
+
+        expect(response).to have_http_status(:ok)
+        expect(json_response['circuit']['state']).to eq('enabled')
+        expect(json_response['circuit']['failure_count']).to eq(2)
+        expect(endpoint.reload).to be_enabled
+      end
+
+      it 'does not enqueue the pending retries of the healthy endpoint' do
+        scheduled = create(:message, project: project, endpoint: endpoint)
+        scheduled.update_columns(next_retry_at: 5.minutes.from_now)
+
+        re_enable
+
+        expect(response).to have_http_status(:ok)
+        expect(scheduled.reload.next_retry_at).to be_present
+        expect(ActiveJob::Base.queue_adapter.enqueued_jobs.select { |job| job[:job] == Messages::DeliverJob }).to be_empty
+      end
+    end
+
+    it 'forbids a maintainer' do
+      endpoint.update!(circuit_state: 'disabled', circuit_failure_count: 5)
+
+      post "/api/v1/projects/#{project.id}/endpoints/#{endpoint.id}/re_enable", headers: auth_headers(maintainer)
+
+      expect(response).to have_http_status(:forbidden)
+      expect(endpoint.reload).to be_disabled
+    end
+
+    it 'forbids an archived endpoint' do
+      endpoint.update!(circuit_state: 'disabled', circuit_failure_count: 5)
+      endpoint.update_columns(archived_at: Time.current)
+
+      re_enable
+
+      expect(response).to have_http_status(:forbidden)
+      expect(endpoint.reload).to be_disabled
+      expect(endpoint.archived_at).to be_present
+    end
+
+    it 'hides the project from a non-member' do
+      endpoint.update!(circuit_state: 'disabled', circuit_failure_count: 5)
+
+      post "/api/v1/projects/#{project.id}/endpoints/#{endpoint.id}/re_enable", headers: auth_headers(outsider)
+
+      expect(response).to have_http_status(:not_found)
+      expect(endpoint.reload).to be_disabled
+    end
+  end
 end

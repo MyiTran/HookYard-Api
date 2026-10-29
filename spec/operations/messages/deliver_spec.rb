@@ -61,6 +61,37 @@ describe Messages::Deliver, type: :operation do
     end
   end
 
+  describe 'retry schedule before the circuit opens' do
+    before { Webhooks::DeliveryPolicy.jitter_source = -> { 0 } }
+
+    it 'follows the fixed free schedule for the first four failures' do
+      allow(http_client).to receive(:post).and_return(http_result(status: 503))
+
+      [5.seconds, 5.minutes, 30.minutes, 2.hours].each_with_index do |delay, index|
+        message.update_columns(next_retry_at: Time.current)
+
+        operation.call(message: message.reload)
+
+        expect(message.reload.next_retry_at).to be_within(1.second).of(Time.current + delay)
+        expect(message.attempt_count).to eq(index + 1)
+        expect(endpoint.reload).to be_enabled
+      end
+    end
+
+    it 'opens the circuit on the fifth failure without rewriting the earlier retries' do
+      allow(http_client).to receive(:post).and_return(http_result(status: 503))
+
+      5.times do
+        message.update_columns(next_retry_at: Time.current)
+        operation.call(message: message.reload)
+      end
+
+      expect(endpoint.reload).to be_circuit_open
+      expect(message.reload).to be_held
+      expect(message.next_retry_at).to be_nil
+    end
+  end
+
   describe 'external text encoding' do
     let(:binary_payload) { "binary\xFF\xFE".b }
 
@@ -105,7 +136,7 @@ describe Messages::Deliver, type: :operation do
         expect(message.attempt_count).to eq(1)
         expect(message.terminal_at).to be_nil
         expect(message.delivery_lease_expires_at).to be_nil
-        expect(message.next_retry_at).to be_between(Time.current + 5.seconds, Time.current + (5.seconds * 1.2))
+        expect(message.next_retry_at).to be_between(Time.current + 5.seconds, Time.current + 6.seconds)
         expect(message.delivery_attempts.one?).to be(true)
         expect(message.delivery_attempts.first.status).to eq('failed')
       end
@@ -127,7 +158,7 @@ describe Messages::Deliver, type: :operation do
 
       deliver(http_result(status: 500))
 
-      expect(message.reload.next_retry_at).to be_between(Time.current + 30.minutes, Time.current + (30.minutes * 1.2))
+      expect(message.reload.next_retry_at).to be_between(Time.current + 30.minutes, Time.current + 36.minutes)
     end
 
     it 'enqueues the next delivery for the retry time' do
@@ -190,21 +221,20 @@ describe Messages::Deliver, type: :operation do
   end
 
   describe 'attempt exhaustion' do
-    it 'terminally fails after the final attempt' do
-      max_attempts = Webhooks::DeliveryPolicy::MAX_ATTEMPTS
-      (max_attempts - 1).times do |index|
+    it 'terminally fails after the eighth attempt' do
+      7.times do |index|
         create(:delivery_attempt, message: message, attempt_number: index + 1, response_status: 500)
       end
-      message.update_columns(attempt_count: max_attempts - 1)
+      message.update_columns(attempt_count: 7)
 
       deliver(http_result(status: 503))
 
       expect(message.reload.status).to eq('failed')
-      expect(message.attempt_count).to eq(max_attempts)
+      expect(message.attempt_count).to eq(8)
       expect(message.next_retry_at).to be_nil
       expect(message.delivery_lease_expires_at).to be_nil
       expect(message.terminal_at).to eq(Time.current)
-      expect(message.delivery_attempts.count).to eq(max_attempts)
+      expect(message.delivery_attempts.count).to eq(8)
     end
 
     it 'does not deliver a message that already used every attempt' do
@@ -310,6 +340,314 @@ describe Messages::Deliver, type: :operation do
       expect(message.terminal_at).to be_nil
       expect(message.delivery_lease_expires_at).to be_nil
       expect(recovered_attempt.error_type).to eq(DeliveryAttempt::LEASE_EXPIRED_ERROR_TYPE)
+    end
+  end
+
+  describe 'tenant delivery policy' do
+    it 'uses the free plan timeout of fifteen seconds by default' do
+      allow(http_client).to receive(:post).and_return(http_result(status: 200))
+
+      operation.call(message: message)
+
+      expect(http_client).to have_received(:post).with(hash_including(timeout: 15))
+    end
+
+    it 'uses the configured pro plan timeout' do
+      project.update!(plan: 'pro', delivery_timeout_seconds: 30)
+      allow(http_client).to receive(:post).and_return(http_result(status: 200))
+
+      operation.call(message: message)
+
+      expect(http_client).to have_received(:post).with(hash_including(timeout: 30))
+    end
+
+    it 'uses the configured pro plan retry delays' do
+      project.update!(plan: 'pro', delivery_retry_delays_seconds: [3])
+      allow(http_client).to receive(:post).and_return(http_result(status: 503))
+
+      operation.call(message: message)
+
+      expect(message.reload.next_retry_at).to be_between(Time.current + 3.seconds, Time.current + 4.seconds)
+    end
+  end
+
+  describe 'circuit failure accounting' do
+    def deliver_message(target, result)
+      allow(http_client).to receive(:post).and_return(result)
+      described_class.new(http_client: http_client, signer: signer).call(message: target)
+    end
+
+    def new_message
+      create(:message, project: project, endpoint: endpoint)
+    end
+
+    it 'resets the consecutive circuit failures after a 2xx response' do
+      endpoint.update_columns(circuit_failure_count: 3)
+
+      deliver(http_result(status: 200))
+
+      expect(endpoint.reload.circuit_failure_count).to eq(0)
+    end
+
+    {
+      'an HTTP 408' => { status: 408 },
+      'an HTTP 429' => { status: 429 },
+      'an HTTP 500' => { status: 500 },
+      'a read timeout' => { error: 'read timeout', error_type: 'Net::ReadTimeout' },
+      'a transport error' => { error: 'connection reset', error_type: 'Errno::ECONNRESET' }
+    }.each do |label, result_attributes|
+      it "counts #{label} toward the circuit failure count" do
+        deliver(http_result(**result_attributes))
+
+        expect(endpoint.reload.circuit_failure_count).to eq(1)
+      end
+    end
+
+    it 'does not count a redirect toward the circuit failures' do
+      deliver(http_result(status: 302))
+
+      expect(message.reload.status).to eq('failed')
+      expect(endpoint.reload.circuit_failure_count).to eq(0)
+    end
+
+    it 'does not count a non-retryable client error toward the circuit failures' do
+      deliver(http_result(status: 404))
+
+      expect(message.reload.status).to eq('failed')
+      expect(endpoint.reload.circuit_failure_count).to eq(0)
+    end
+
+    it 'does not count a rejected destination toward the circuit failures' do
+      deliver(
+        http_result(
+          error: 'destination is not publicly routable',
+          error_type: 'Webhooks::DestinationResolver::NotPubliclyRoutable'
+        )
+      )
+
+      expect(message.reload.status).to eq('failed')
+      expect(message.terminal_at).to eq(Time.current)
+      expect(message.next_retry_at).to be_nil
+      expect(endpoint.reload.circuit_failure_count).to eq(0)
+      expect(endpoint).to be_enabled
+      expect(ActiveJob::Base.queue_adapter.enqueued_jobs.select { |job| job[:job] == Messages::DeliverJob }).to be_empty
+    end
+
+    it 'counts four HTTP 500 responses without opening the circuit' do
+      4.times { deliver_message(new_message, http_result(status: 500)) }
+
+      endpoint.reload
+      expect(endpoint).to be_enabled
+      expect(endpoint.circuit_failure_count).to eq(4)
+      expect(endpoint.circuit_opened_at).to be_nil
+      expect(endpoint.messages.pending.not_held.count).to eq(4)
+    end
+
+    it 'counts a transient destination resolution failure toward the circuit failures' do
+      deliver(
+        http_result(
+          error: 'destination hostname could not be resolved',
+          error_type: 'Webhooks::DestinationResolver::ResolutionFailed'
+        )
+      )
+
+      endpoint.reload
+      expect(endpoint.circuit_failure_count).to eq(1)
+      expect(endpoint).to be_enabled
+      expect(message.reload.status).to eq('pending')
+      expect(message.next_retry_at).to be_between(Time.current + 5.seconds, Time.current + 6.seconds)
+    end
+
+    it 'does not count a signing failure toward the circuit failures' do
+      failing_signer = double('signer')
+      allow(failing_signer).to receive(:sign).and_raise(StandardError, 'bad key')
+
+      described_class.new(http_client: http_client, signer: failing_signer).call(message: message)
+
+      expect(message.reload.status).to eq('failed')
+      expect(endpoint.reload.circuit_failure_count).to eq(0)
+    end
+
+    it 'does not count a missing signing secret toward the circuit failures' do
+      endpoint.endpoint_signing_secrets.destroy_all
+
+      deliver(http_result(status: 200))
+
+      expect(message.reload.status).to eq('failed')
+      expect(endpoint.reload.circuit_failure_count).to eq(0)
+    end
+
+    it 'keeps the endpoint enabled while failures stay below the threshold' do
+      4.times { deliver_message(new_message, http_result(status: 503)) }
+
+      expect(endpoint.reload).to be_enabled
+      expect(endpoint.circuit_failure_count).to eq(4)
+    end
+
+    it 'keeps a timeout failure retryable and circuit-counted' do
+      deliver(http_result(error: 'execution expired', error_type: 'Net::ReadTimeout'))
+
+      endpoint.reload
+      expect(endpoint.circuit_failure_count).to eq(1)
+      expect(message.reload.status).to eq('pending')
+      expect(message.attempt_count).to eq(1)
+      expect(message.next_retry_at).to be_present
+      expect(message.delivery_attempts.last.failure_category).to eq(Webhooks::FailureCategory::TIMEOUT)
+    end
+
+    it 'opens the circuit on the fifth consecutive failure and holds pending messages' do
+      4.times { deliver_message(new_message, http_result(status: 503)) }
+      last_failure = new_message
+
+      deliver_message(last_failure, http_result(status: 503))
+
+      endpoint.reload
+      expect(endpoint).to be_circuit_open
+      expect(endpoint.circuit_failure_count).to eq(5)
+      expect(endpoint.circuit_opened_at).to eq(Time.current)
+      expect(endpoint.circuit_next_probe_at).to be_present
+      expect(endpoint.messages.pending.held.count).to eq(5)
+      expect(last_failure.reload.hold_reason).to eq('endpoint_circuit_open')
+      expect(last_failure.delivery_attempts.count).to eq(1)
+    end
+
+    it 'resets the failure streak when a success happens before the threshold' do
+      2.times { deliver_message(new_message, http_result(status: 503)) }
+      deliver_message(new_message, http_result(status: 200))
+      2.times { deliver_message(new_message, http_result(status: 503)) }
+
+      expect(endpoint.reload).to be_enabled
+      expect(endpoint.circuit_failure_count).to eq(2)
+    end
+  end
+
+  describe 'messages in flight when the circuit opens' do
+    def new_message
+      create(:message, project: project, endpoint: endpoint)
+    end
+
+    it 'holds every message whose attempt finishes after the circuit opened' do
+      Webhooks::DeliveryPolicy.jitter_source = -> { 0 }
+      endpoint.update!(circuit_failure_count: Webhooks::CircuitPolicy::FAILURE_THRESHOLD - 2)
+      trigger = new_message
+      other_in_flight = create(:message, project: project, endpoint: endpoint)
+
+      nested = described_class.new(http_client: double(post: http_result(status: 503)), signer: signer)
+      allow(http_client).to receive(:post) do
+        nested.call(message: other_in_flight)
+        http_result(status: 503)
+      end
+
+      operation.call(message: trigger)
+
+      expect(endpoint.reload).to be_circuit_open
+      [trigger, other_in_flight].each do |record|
+        record.reload
+        expect(record.status).to eq('pending')
+        expect(record.held_at).to be_present
+        expect(record.hold_reason).to eq('endpoint_circuit_open')
+        expect(record.next_retry_at).to be_nil
+        expect(record.attempt_count).to eq(1)
+      end
+    end
+
+    it 'does not schedule a retry for a message that joined the held backlog' do
+      allow(http_client).to receive(:post) do
+        endpoint.open_circuit!
+        http_result(status: 503)
+      end
+
+      operation.call(message: message)
+
+      expect(message.reload).to be_held
+      expect(message.next_retry_at).to be_nil
+      expect(ActiveJob::Base.queue_adapter.enqueued_jobs.select { |job| job[:job] == Messages::DeliverJob }).to be_empty
+    end
+
+    it 'keeps the attempt count untouched by the circuit transition' do
+      allow(http_client).to receive(:post) do
+        endpoint.open_circuit!
+        http_result(status: 503)
+      end
+
+      expect { operation.call(message: message) }.to change { message.reload.attempt_count }.from(0).to(1)
+    end
+  end
+
+  describe 'delivery while the endpoint is not enabled' do
+    def held_message(created_at: Time.current, reason: 'endpoint_circuit_open')
+      create(:message, project: project, endpoint: endpoint).tap do |record|
+        record.update_columns(
+          held_at: created_at,
+          hold_reason: reason,
+          created_at: created_at,
+          updated_at: created_at
+        )
+      end
+    end
+
+    context 'when the circuit is open' do
+      before do
+        endpoint.update!(
+          circuit_state: 'circuit_open',
+          circuit_failure_count: 5,
+          circuit_opened_at: Time.current,
+          circuit_disable_at: Time.current + 5.days,
+          circuit_next_probe_at: Time.current
+        )
+      end
+
+      it 'holds the message without consuming an attempt or sending a request' do
+        record = create(:message, project: project, endpoint: endpoint)
+        allow(http_client).to receive(:post)
+
+        operation.call(message: record)
+
+        expect(http_client).not_to have_received(:post)
+        expect(record.reload.status).to eq('pending')
+        expect(record.attempt_count).to eq(0)
+        expect(record.delivery_attempts).to be_empty
+        expect(record).to be_held
+        expect(record.hold_reason).to eq('endpoint_circuit_open')
+      end
+
+      it 'keeps an already held message frozen without sending it as a probe' do
+        record = held_message
+        allow(http_client).to receive(:post)
+
+        operation.call(message: record)
+
+        expect(http_client).not_to have_received(:post)
+        expect(record.reload.held_at).to eq(Time.current)
+        expect(record.attempt_count).to eq(0)
+        expect(record.delivery_attempts).to be_empty
+      end
+
+      it 'never touches the synthetic probe lease' do
+        record = create(:message, project: project, endpoint: endpoint)
+        endpoint.update!(circuit_probe_lease_expires_at: Time.current + 30.seconds)
+
+        operation.call(message: record)
+
+        expect(endpoint.reload.circuit_probe_lease_expires_at).to eq(Time.current + 30.seconds)
+      end
+    end
+
+    context 'when the endpoint is disabled' do
+      before { endpoint.update!(circuit_state: 'disabled', circuit_next_probe_at: nil) }
+
+      it 'holds the message with the disabled reason and sends nothing' do
+        record = create(:message, project: project, endpoint: endpoint)
+        allow(http_client).to receive(:post)
+
+        operation.call(message: record)
+
+        expect(http_client).not_to have_received(:post)
+        expect(record.reload).to be_held
+        expect(record.hold_reason).to eq('endpoint_disabled')
+        expect(record.attempt_count).to eq(0)
+        expect(endpoint.reload).to be_disabled
+      end
     end
   end
 end
