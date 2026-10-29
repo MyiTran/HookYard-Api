@@ -1,6 +1,9 @@
 require 'rails_helper'
 
 describe Project, type: :model do
+  let(:project) { create(:project) }
+  let(:current_period_start) { ProjectUsagePeriod.period_start_for(Time.current) }
+
   describe 'validations' do
     context 'when the plan is a supported tenant plan' do
       it 'is valid' do
@@ -82,9 +85,6 @@ describe Project, type: :model do
       end
     end
   end
-
-  let(:project) { create(:project) }
-  let(:current_period_start) { ProjectUsagePeriod.period_start_for(Time.current) }
 
   describe '#deliveries_used_in_period' do
     context 'when the project has no metered usage' do
