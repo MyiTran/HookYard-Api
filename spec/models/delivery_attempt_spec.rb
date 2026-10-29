@@ -22,6 +22,20 @@ describe DeliveryAttempt, type: :model do
     end
   end
 
+  describe '#completed?' do
+    it 'is false while the attempt has no response or error' do
+      expect(build(:delivery_attempt).completed?).to be(false)
+    end
+
+    it 'is true once a response was recorded' do
+      expect(build(:delivery_attempt, response_status: 500).completed?).to be(true)
+    end
+
+    it 'is true once a transport error was recorded' do
+      expect(build(:delivery_attempt, error_type: 'Net::ReadTimeout').completed?).to be(true)
+    end
+  end
+
   describe '#status' do
     context 'when the attempt has a 2xx response' do
       it 'is succeeded' do
