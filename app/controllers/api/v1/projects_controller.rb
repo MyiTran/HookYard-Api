@@ -10,11 +10,13 @@ module Api
           order: params[:order]
         )
         pagy, projects = paginate(projects_scope)
+        projects = projects.includes(:project_memberships)
 
         render_resource_collection(
-          projects.includes(:project_memberships),
+          projects,
           each_serializer: ProjectSerializer,
           current_user: current_user,
+          usage_summary: ProjectUsageSummary.new(projects),
           pagy: pagy
         )
       end
@@ -41,6 +43,14 @@ module Api
         render_resource(project, current_user: current_user)
       end
 
+      def change_plan
+        project = policy_scope(Project).find(params[:id])
+        authorize project, :change_plan?
+        project = ::Projects::ChangePlan.call(project: project, plan: plan_params)
+
+        render_resource(project, current_user: current_user)
+      end
+
       def destroy
         project = policy_scope(Project).find(params[:id])
         authorize project
@@ -53,6 +63,10 @@ module Api
 
       def project_params
         params.require(:project).permit(:name)
+      end
+
+      def plan_params
+        params.require(:project).permit(:plan)[:plan]
       end
     end
   end

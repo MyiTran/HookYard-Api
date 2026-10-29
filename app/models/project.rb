@@ -22,6 +22,7 @@ class Project < ApplicationRecord
   has_many :events, dependent: :destroy
   has_many :endpoints, dependent: :destroy
   has_many :ingest_rejections, dependent: :destroy
+  has_many :usage_periods, class_name: 'ProjectUsagePeriod', dependent: :destroy
   has_many :users, through: :project_memberships
 
   validates :name, presence: true
@@ -44,6 +45,18 @@ class Project < ApplicationRecord
     return false if user.nil?
 
     project_memberships.exists?(user_id: user.id)
+  end
+
+  def endpoint_count
+    endpoints.not_archived.count
+  end
+
+  def plan_locked_endpoint_ids
+    endpoints.not_archived.order(:created_at, :id).offset(Plans::Entitlements.endpoint_limit(self)).pluck(:id)
+  end
+
+  def deliveries_used_in_period(at = Time.current)
+    ProjectUsagePeriod.used_deliveries(project: self, at: at)
   end
 
   def owner

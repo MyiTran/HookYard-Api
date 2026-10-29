@@ -53,6 +53,51 @@ describe 'Projects::Endpoints', type: :request do
       expect(response).to have_http_status(:not_found)
     end
 
+    describe 'plan locking' do
+      let(:endpoint_limit) { Plans::Entitlements.endpoint_limit(project) }
+
+      it 'locks the endpoints created beyond the plan endpoint limit' do
+        endpoints = Array.new(endpoint_limit + 2) do |index|
+          create(:endpoint, project: project, created_at: Time.utc(2026, 10, 1, 9, 0) + index.minutes)
+        end
+
+        get "/api/v1/projects/#{project.id}/endpoints", params: { page: { size: 25 } }, headers: auth_headers(owner)
+
+        locked_ids = JSON.parse(response.body)['data']
+                     .select { |entry| entry['plan_locked'] }
+                     .map { |entry| entry['id'] }
+        expect(locked_ids).to match_array(endpoints.last(2).map(&:id))
+      end
+
+      it 'locks nothing while the project is within its plan limit' do
+        create_list(:endpoint, endpoint_limit, project: project)
+
+        get "/api/v1/projects/#{project.id}/endpoints", headers: auth_headers(owner)
+
+        expect(JSON.parse(response.body)['data'].map { |entry| entry['plan_locked'] }).to all(be(false))
+      end
+
+      it 'does not archive or disable the locked endpoints' do
+        endpoints = Array.new(endpoint_limit + 1) do |index|
+          create(:endpoint, project: project, created_at: Time.utc(2026, 10, 1, 9, 0) + index.minutes)
+        end
+
+        get "/api/v1/projects/#{project.id}/endpoints", headers: auth_headers(owner)
+
+        expect(endpoints.map { |endpoint| endpoint.reload.archived_at }).to all(be_nil)
+        expect(endpoints.map { |endpoint| endpoint.reload.active }).to all(be(true))
+      end
+
+      it 'does not lock endpoints of a pro project up to the pro limit' do
+        project.update!(plan: Project::PRO_PLAN)
+        create_list(:endpoint, Plans::Entitlements.definition_for(Project::FREE_PLAN).endpoint_limit + 2, project: project)
+
+        get "/api/v1/projects/#{project.id}/endpoints", headers: auth_headers(owner)
+
+        expect(JSON.parse(response.body)['data'].map { |entry| entry['plan_locked'] }).to all(be(false))
+      end
+    end
+
     describe 'pagination' do
       it 'returns the first page with pagination metadata' do
         create_list(:endpoint, 3, project: project)
@@ -205,7 +250,7 @@ describe 'Projects::Endpoints', type: :request do
       expect(body['active']).to be(true)
       expect(body['event_types']).to eq([])
       expect(body['archived_at']).to be_nil
-      expect(body['project']).to eq({ 'id' => project.id, 'name' => project.name })
+      expect(body['project']).to eq({ 'id' => project.id, 'name' => project.name, 'plan' => project.plan })
       expect(body['signing_secret']).to be_present
       expect(body['has_signing_secret']).to be(true)
       expect(body['signing_secret_version']).to eq(1)
@@ -292,6 +337,22 @@ describe 'Projects::Endpoints', type: :request do
 
       expect(response).to have_http_status(:forbidden)
       expect(project.endpoints.count).to eq(0)
+    end
+
+    it 'rejects the endpoint with a payment required error when the plan endpoint limit is reached' do
+      create_list(:endpoint, Plans::Entitlements.endpoint_limit(project), project: project)
+
+      post "/api/v1/projects/#{project.id}/endpoints",
+           params: { endpoint: { name: 'Billing', url: 'https://example.com/hooks' } },
+           headers: auth_headers(owner), as: :json
+
+      expect(response).to have_http_status(:payment_required)
+      body = JSON.parse(response.body)
+      expect(body['error']).to eq('plan_limit_exceeded')
+      expect(body['used']).to eq(Plans::Entitlements.endpoint_limit(project))
+      expect(body['limit']).to eq(Plans::Entitlements.endpoint_limit(project))
+      expect(body['errors']).to contain_exactly(hash_including('field' => 'endpoint_limit'))
+      expect(project.endpoints.not_archived.count).to eq(Plans::Entitlements.endpoint_limit(project))
     end
 
     it 'hides the project from a non-member' do

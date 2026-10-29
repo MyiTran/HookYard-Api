@@ -42,6 +42,10 @@ Rails.application.routes.draw do
       end
 
       resources :projects, only: %i[index show create update destroy] do
+        member do
+          patch :change_plan
+        end
+
         scope module: :projects do
           resources :memberships, only: %i[index destroy]
           resources :invitations, only: %i[index create destroy]

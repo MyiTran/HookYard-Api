@@ -19,6 +19,7 @@ module Api
           render_resource_collection(
             endpoints.includes(:endpoint_signing_secrets),
             each_serializer: EndpointSerializer,
+            plan_locks: EndpointPlanLocks.new([@project]),
             pagy: pagy
           )
         end

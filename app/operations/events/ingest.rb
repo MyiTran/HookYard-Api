@@ -30,9 +30,13 @@ module Events
     end
 
     def accept(project, attributes)
+      duplicate = project.events.find_by(idempotency_key: attributes[:idempotency_key])
+      return [validate_duplicate!(duplicate, attributes), [], false] if duplicate
+
       Event.transaction do
         endpoints = lock_eligible_endpoints(project, attributes[:event_type])
         reject_when_full!(endpoints)
+        reserve_delivery_quota!(project, endpoints.size)
         event = project.events.create!(
           event_type: attributes[:event_type],
           payload: attributes[:payload],
@@ -41,10 +45,14 @@ module Events
         [event, Events::FanOut.call(event: event, endpoints: endpoints), true]
       end
     rescue ActiveRecord::RecordNotUnique
-      [existing_event!(project, attributes), [], false]
+      event = project.events.find_by!(idempotency_key: attributes[:idempotency_key])
+      [validate_duplicate!(event, attributes), [], false]
     rescue EndpointQueueFull => e
-      record_rejection(project, attributes, e.endpoint)
+      record_rejection(project, attributes, reason: IngestRejection::QUEUE_CAPACITY_EXCEEDED, endpoint: e.endpoint)
       raise ApiError::QueueCapacityExceededError
+    rescue ApiError::PlanLimitExceededError
+      record_rejection(project, attributes, reason: IngestRejection::MONTHLY_DELIVERY_LIMIT_EXCEEDED)
+      raise
     end
 
     def lock_eligible_endpoints(project, event_type)
@@ -59,13 +67,26 @@ module Events
       raise EndpointQueueFull.new(full_endpoint) if full_endpoint
     end
 
-    def record_rejection(project, attributes, endpoint)
+    def reserve_delivery_quota!(project, deliveries)
+      limit = Plans::Entitlements.monthly_delivery_limit(project)
+      return if ProjectUsagePeriod.reserve_deliveries(project: project, quantity: deliveries, limit: limit)
+
+      raise ApiError::PlanLimitExceededError.new(
+        message: "The #{project.plan} plan allows at most #{limit} deliveries per month",
+        field: 'monthly_delivery_limit',
+        used: ProjectUsagePeriod.used_deliveries(project: project),
+        limit: limit,
+        period_ends: ProjectUsagePeriod.period_ends_at
+      )
+    end
+
+    def record_rejection(project, attributes, reason:, endpoint: nil)
       IngestRejection.create!(
         project: project,
         endpoint: endpoint,
-        reason: IngestRejection::QUEUE_CAPACITY_EXCEEDED,
+        reason: reason,
         event_type: attributes[:event_type],
-        idempotency_key: attributes[:idempotency_key],
+        idempotency_key_digest: IngestRejection.digest_idempotency_key(attributes[:idempotency_key]),
         payload: rejection_payload(attributes[:payload])
       )
     end
@@ -74,8 +95,7 @@ module Events
       payload.is_a?(Hash) ? payload : {}
     end
 
-    def existing_event!(project, attributes)
-      event = project.events.find_by!(idempotency_key: attributes[:idempotency_key])
+    def validate_duplicate!(event, attributes)
       expected_fingerprint = Event.fingerprint_for(event_type: attributes[:event_type], payload: attributes[:payload])
 
       unless event.idempotency_fingerprint == expected_fingerprint

@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_10_27_120200) do
+ActiveRecord::Schema[8.0].define(version: 2026_10_29_110000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -184,9 +184,9 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_27_120200) do
     t.uuid "endpoint_id"
     t.string "reason", null: false
     t.string "event_type"
-    t.string "idempotency_key"
     t.jsonb "payload", default: {}, null: false
     t.datetime "created_at", null: false
+    t.string "idempotency_key_digest"
     t.index ["endpoint_id"], name: "index_ingest_rejections_on_endpoint_id"
     t.index ["project_id", "created_at"], name: "index_ingest_rejections_on_project_id_and_created_at"
     t.index ["project_id"], name: "index_ingest_rejections_on_project_id"
@@ -280,6 +280,18 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_27_120200) do
     t.index ["user_id"], name: "index_project_memberships_on_user_id"
   end
 
+  create_table "project_usage_periods", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "project_id", null: false
+    t.date "period_starts_on", null: false
+    t.integer "deliveries_count", default: 0, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["project_id", "period_starts_on"], name: "index_project_usage_periods_on_project_id_and_period_starts_on", unique: true
+    t.index ["project_id"], name: "index_project_usage_periods_on_project_id"
+    t.check_constraint "EXTRACT(day FROM period_starts_on) = 1::numeric", name: "project_usage_periods_period_starts_on_first_of_month"
+    t.check_constraint "deliveries_count >= 0", name: "project_usage_periods_deliveries_count_non_negative"
+  end
+
   create_table "projects", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.string "name", null: false
     t.datetime "created_at", null: false
@@ -358,4 +370,5 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_27_120200) do
   add_foreign_key "project_invitations", "users", column: "recipient_id", on_delete: :cascade
   add_foreign_key "project_memberships", "projects", on_delete: :cascade
   add_foreign_key "project_memberships", "users", on_delete: :cascade
+  add_foreign_key "project_usage_periods", "projects", on_delete: :cascade
 end

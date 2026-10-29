@@ -3,10 +3,10 @@ require 'rails_helper'
 describe Webhooks::DeliveryPolicy, type: :model do
   describe '.retry_delay' do
     it 'returns the jittered schedule for every retryable attempt' do
-      expect(described_class.retry_delay(1)).to be_between(1.minute, 1.minute * 1.2)
+      expect(described_class.retry_delay(1)).to be_between(5.seconds, 5.seconds * 1.2)
       expect(described_class.retry_delay(2)).to be_between(5.minutes, 5.minutes * 1.2)
-      expect(described_class.retry_delay(3)).to be_between(15.minutes, 15.minutes * 1.2)
-      expect(described_class.retry_delay(4)).to be_between(60.minutes, 60.minutes * 1.2)
+      expect(described_class.retry_delay(3)).to be_between(30.minutes, 30.minutes * 1.2)
+      expect(described_class.retry_delay(4)).to be_between(2.hours, 2.hours * 1.2)
     end
 
     it 'never returns a delay earlier than the base schedule' do

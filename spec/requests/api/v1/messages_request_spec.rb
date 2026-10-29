@@ -97,7 +97,7 @@ describe 'Messages', type: :request do
 
       expect(response).to have_http_status(:ok)
       expect(json_response['data'].map { |entry| entry['id'] }).to contain_exactly(message.id)
-      expect(json_response['data'].first).to include('attempt_count' => 1, 'max_attempts' => 5)
+      expect(json_response['data'].first).to include('attempt_count' => 1, 'max_attempts' => Webhooks::DeliveryPolicy::MAX_ATTEMPTS)
     end
   end
 end
