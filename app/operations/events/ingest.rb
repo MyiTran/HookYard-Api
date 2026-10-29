@@ -1,5 +1,8 @@
 module Events
   class Ingest < ApplicationOperation
+    REJECTION_PAYLOAD_KEY_LIMIT = 20
+    REJECTION_PAYLOAD_KEY_MAX_LENGTH = 64
+
     Result = Struct.new(:event, :created, :message_ids, keyword_init: true) do
       def messages_count
         message_ids.size
@@ -93,7 +96,21 @@ module Events
     end
 
     def rejection_payload(payload)
-      payload.is_a?(Hash) ? payload : {}
+      return {} if payload.nil?
+
+      {
+        'payload_keys' => rejection_payload_keys(payload),
+        'payload_bytes' => payload.to_json.bytesize
+      }
+    end
+
+    def rejection_payload_keys(payload)
+      return [] unless payload.is_a?(Hash)
+
+      payload.keys
+             .map { |key| key.to_s.first(REJECTION_PAYLOAD_KEY_MAX_LENGTH) }
+             .sort
+             .first(REJECTION_PAYLOAD_KEY_LIMIT)
     end
 
     def validate_duplicate!(event, attributes)

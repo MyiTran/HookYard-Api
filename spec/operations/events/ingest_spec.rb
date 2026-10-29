@@ -111,7 +111,46 @@ describe Events::Ingest, type: :operation do
         expect(rejection.reason).to eq('queue_capacity_exceeded')
         expect(rejection.event_type).to eq('order.created')
         expect(rejection.idempotency_key_digest).to eq(Digest::SHA256.hexdigest(attributes[:idempotency_key]))
-        expect(rejection.payload).to eq(attributes[:payload])
+        expect(rejection.payload).to eq(
+          'payload_keys' => ['order_id'],
+          'payload_bytes' => attributes[:payload].to_json.bytesize
+        )
+      end
+
+      it 'keeps only bounded payload metadata instead of the raw event payload' do
+        sensitive_attributes = attributes.merge(
+          idempotency_key: 'raw-idempotency-key-must-not-persist',
+          payload: {
+            'order_id' => 'order-123',
+            'authorization' => 'Bearer super-secret-token',
+            'api_key' => 'sk_live_topsecret',
+            'card' => { 'number' => '4242424242424242', 'cvv' => '123' }
+          }
+        )
+
+        expect { described_class.call(project: project, attributes: sensitive_attributes) }
+          .to raise_error(ApiError::QueueCapacityExceededError)
+
+        rejection = IngestRejection.sole
+        expect(rejection.payload.keys).to contain_exactly('payload_keys', 'payload_bytes')
+        expect(rejection.payload['payload_keys']).to eq(%w[api_key authorization card order_id])
+        expect(rejection.payload['payload_bytes']).to eq(sensitive_attributes[:payload].to_json.bytesize)
+        expect(rejection.attributes.to_json).not_to include(
+          'super-secret-token', 'sk_live_topsecret', '4242424242424242', 'raw-idempotency-key-must-not-persist'
+        )
+      end
+
+      it 'bounds the payload metadata it keeps for support logs' do
+        bulky_attributes = attributes.merge(
+          payload: Array.new(30) { |index| ["key_#{index}".ljust(80, 'x'), 'value'] }.to_h
+        )
+
+        expect { described_class.call(project: project, attributes: bulky_attributes) }
+          .to raise_error(ApiError::QueueCapacityExceededError)
+
+        rejection = IngestRejection.sole
+        expect(rejection.payload['payload_keys'].size).to eq(described_class::REJECTION_PAYLOAD_KEY_LIMIT)
+        expect(rejection.payload['payload_keys']).to all(satisfy { |key| key.length <= described_class::REJECTION_PAYLOAD_KEY_MAX_LENGTH })
       end
 
       it 'does not reserve the idempotency key so a later retry can succeed' do
@@ -233,7 +272,10 @@ describe Events::Ingest, type: :operation do
         expect(rejection.reason).to eq(IngestRejection::MONTHLY_DELIVERY_LIMIT_EXCEEDED)
         expect(rejection.endpoint_id).to be_nil
         expect(rejection.event_type).to eq('order.created')
-        expect(rejection.payload).to eq(attributes[:payload])
+        expect(rejection.payload).to eq(
+          'payload_keys' => ['order_id'],
+          'payload_bytes' => attributes[:payload].to_json.bytesize
+        )
       end
 
       it 'stores a digest of the idempotency key instead of the raw key' do

@@ -122,7 +122,10 @@ describe 'Events', type: :request do
         rejection = project.ingest_rejections.sole
         expect(rejection.reason).to eq(IngestRejection::MONTHLY_DELIVERY_LIMIT_EXCEEDED)
         expect(rejection.idempotency_key_digest).to eq(Digest::SHA256.hexdigest(event_params[:idempotency_key]))
-        expect(rejection.payload).to eq(event_params[:payload])
+        expect(rejection.payload).to eq(
+          'payload_keys' => ['order_id'],
+          'payload_bytes' => event_params[:payload].to_json.bytesize
+        )
       end
 
       it 'accepts the event again once the plan allows it' do

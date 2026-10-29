@@ -50,6 +50,39 @@ describe 'Admin::Accounts', type: :request do
       expect(account.reload.plan).to eq(User::FREE_PLAN)
     end
 
+    it 'forbids a project owner without the global admin role' do
+      project_owner = create(:user)
+      create(:project, :with_owner, owner: project_owner)
+
+      patch "/api/v1/admin/accounts/#{account.id}/plan",
+            params: { account: { plan: User::PRO_PLAN } }, headers: auth_headers(project_owner), as: :json
+
+      expect(response).to have_http_status(:forbidden)
+      expect(account.reload.plan).to eq(User::FREE_PLAN)
+    end
+
+    it 'forbids a maintainer of the target account project' do
+      project = create(:project, :with_owner, owner: account)
+      maintainer = create(:user)
+      create(:project_membership, project: project, user: maintainer, role: :maintainer)
+
+      patch "/api/v1/admin/accounts/#{account.id}/plan",
+            params: { account: { plan: User::PRO_PLAN } }, headers: auth_headers(maintainer), as: :json
+
+      expect(response).to have_http_status(:forbidden)
+      expect(account.reload.plan).to eq(User::FREE_PLAN)
+    end
+
+    it 'forbids an outsider with no project relationship' do
+      outsider = create(:user)
+
+      patch "/api/v1/admin/accounts/#{account.id}/plan",
+            params: { account: { plan: User::PRO_PLAN } }, headers: auth_headers(outsider), as: :json
+
+      expect(response).to have_http_status(:forbidden)
+      expect(account.reload.plan).to eq(User::FREE_PLAN)
+    end
+
     it 'requires authentication' do
       patch "/api/v1/admin/accounts/#{account.id}/plan", params: { account: { plan: User::PRO_PLAN } }, as: :json
 

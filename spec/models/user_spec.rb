@@ -85,6 +85,20 @@ describe User, type: :model do
         expect(member.owned_project_count).to eq(0)
       end
     end
+
+    context 'when the account owns one project and maintains another account project' do
+      let(:account) { create(:user) }
+
+      before do
+        create(:project, :with_owner, owner: account)
+        other_project = create(:project, :with_owner)
+        create(:project_membership, project: other_project, user: account, role: :maintainer)
+      end
+
+      it 'counts only the projects it is the billing owner of' do
+        expect(account.owned_project_count).to eq(1)
+      end
+    end
   end
 
   describe '#deliveries_used_in_period' do
