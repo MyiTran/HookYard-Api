@@ -54,7 +54,7 @@ describe 'Projects::Endpoints', type: :request do
     end
 
     describe 'plan locking' do
-      let(:endpoint_limit) { Plans::Entitlements.endpoint_limit(project) }
+      let(:endpoint_limit) { Plans::Entitlements.endpoint_limit(owner) }
 
       it 'locks the endpoints created beyond the plan endpoint limit' do
         endpoints = Array.new(endpoint_limit + 2) do |index|
@@ -89,8 +89,8 @@ describe 'Projects::Endpoints', type: :request do
       end
 
       it 'does not lock endpoints of a pro project up to the pro limit' do
-        project.update!(plan: Project::PRO_PLAN)
-        create_list(:endpoint, Plans::Entitlements.definition_for(Project::FREE_PLAN).endpoint_limit + 2, project: project)
+        owner.update!(plan: User::PRO_PLAN)
+        create_list(:endpoint, Plans::Entitlements.definition_for(User::FREE_PLAN).endpoint_limit + 2, project: project)
 
         get "/api/v1/projects/#{project.id}/endpoints", headers: auth_headers(owner)
 
@@ -250,7 +250,7 @@ describe 'Projects::Endpoints', type: :request do
       expect(body['active']).to be(true)
       expect(body['event_types']).to eq([])
       expect(body['archived_at']).to be_nil
-      expect(body['project']).to eq({ 'id' => project.id, 'name' => project.name, 'plan' => project.plan })
+      expect(body['project']).to eq({ 'id' => project.id, 'name' => project.name, 'plan' => User::FREE_PLAN })
       expect(body['signing_secret']).to be_present
       expect(body['has_signing_secret']).to be(true)
       expect(body['signing_secret_version']).to eq(1)
@@ -340,7 +340,7 @@ describe 'Projects::Endpoints', type: :request do
     end
 
     it 'rejects the endpoint with a payment required error when the plan endpoint limit is reached' do
-      create_list(:endpoint, Plans::Entitlements.endpoint_limit(project), project: project)
+      create_list(:endpoint, Plans::Entitlements.endpoint_limit(owner), project: project)
 
       post "/api/v1/projects/#{project.id}/endpoints",
            params: { endpoint: { name: 'Billing', url: 'https://example.com/hooks' } },
@@ -349,10 +349,10 @@ describe 'Projects::Endpoints', type: :request do
       expect(response).to have_http_status(:payment_required)
       body = JSON.parse(response.body)
       expect(body['error']).to eq('plan_limit_exceeded')
-      expect(body['used']).to eq(Plans::Entitlements.endpoint_limit(project))
-      expect(body['limit']).to eq(Plans::Entitlements.endpoint_limit(project))
+      expect(body['used']).to eq(Plans::Entitlements.endpoint_limit(owner))
+      expect(body['limit']).to eq(Plans::Entitlements.endpoint_limit(owner))
       expect(body['errors']).to contain_exactly(hash_including('field' => 'endpoint_limit'))
-      expect(project.endpoints.not_archived.count).to eq(Plans::Entitlements.endpoint_limit(project))
+      expect(project.endpoints.not_archived.count).to eq(Plans::Entitlements.endpoint_limit(owner))
     end
 
     it 'hides the project from a non-member' do

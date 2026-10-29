@@ -2,53 +2,46 @@ require 'rails_helper'
 
 describe Project, type: :model do
   let(:project) { create(:project) }
-  let(:current_period_start) { ProjectUsagePeriod.period_start_for(Time.current) }
 
   describe 'validations' do
-    context 'when the plan is a supported tenant plan' do
-      it 'is valid' do
-        expect(build(:project, plan: 'free')).to be_valid
-        expect(build(:project, plan: 'pro')).to be_valid
-      end
-    end
-
-    context 'when the plan is unknown' do
+    context 'when the billing owner is missing' do
       it 'is invalid' do
-        project = build(:project, plan: 'enterprise')
+        project = build(:project, billing_owner: nil)
 
         expect(project).not_to be_valid
-        expect(project.errors[:plan]).to be_present
+        expect(project.errors[:billing_owner]).to be_present
       end
     end
 
-    context 'when a free tenant overrides the delivery timeout' do
+    context 'when a free account overrides the delivery timeout' do
       it 'is invalid' do
-        project = build(:project, plan: 'free', delivery_timeout_seconds: 20)
+        project = build(:project, delivery_timeout_seconds: 20)
 
         expect(project).not_to be_valid
         expect(project.errors[:base]).to be_present
       end
     end
 
-    context 'when a free tenant overrides the retry schedule' do
+    context 'when a free account overrides the retry schedule' do
       it 'is invalid' do
-        project = build(:project, plan: 'free', delivery_retry_delays_seconds: [5])
+        project = build(:project, delivery_retry_delays_seconds: [5])
 
         expect(project).not_to be_valid
         expect(project.errors[:base]).to be_present
       end
     end
 
-    context 'when a pro tenant configures a timeout inside the allowed range' do
+    context 'when the billing owner is on the pro plan and configures a timeout inside the allowed range' do
       it 'is valid for the inclusive boundaries' do
-        expect(build(:project, plan: 'pro', delivery_timeout_seconds: 1)).to be_valid
-        expect(build(:project, plan: 'pro', delivery_timeout_seconds: 15)).to be_valid
-        expect(build(:project, plan: 'pro', delivery_timeout_seconds: 30)).to be_valid
+        [1, 15, 30].each do |seconds|
+          expect(build(:project, :pro, delivery_timeout_seconds: seconds)).to be_valid,
+                                                                             "expected #{seconds} seconds to be accepted"
+        end
       end
 
       it 'rejects a timeout outside the allowed range' do
         [0, 31, -5].each do |seconds|
-          project = build(:project, plan: 'pro', delivery_timeout_seconds: seconds)
+          project = build(:project, :pro, delivery_timeout_seconds: seconds)
 
           expect(project).not_to be_valid, "expected #{seconds} seconds to be rejected"
           expect(project.errors[:delivery_timeout_seconds]).to be_present
@@ -56,21 +49,21 @@ describe Project, type: :model do
       end
 
       it 'rejects a non integer timeout' do
-        project = build(:project, plan: 'pro', delivery_timeout_seconds: 2.5)
+        project = build(:project, :pro, delivery_timeout_seconds: 2.5)
 
         expect(project).not_to be_valid
         expect(project.errors[:delivery_timeout_seconds]).to be_present
       end
     end
 
-    context 'when a pro tenant configures retry delays' do
+    context 'when the billing owner is on the pro plan and configures retry delays' do
       it 'is valid for positive delay values' do
-        expect(build(:project, plan: 'pro', delivery_retry_delays_seconds: [5, 300, 3600])).to be_valid
+        expect(build(:project, :pro, delivery_retry_delays_seconds: [5, 300, 3600])).to be_valid
       end
 
       it 'rejects zero or negative delays' do
         [[0], [-5]].each do |delays|
-          project = build(:project, plan: 'pro', delivery_retry_delays_seconds: delays)
+          project = build(:project, :pro, delivery_retry_delays_seconds: delays)
 
           expect(project).not_to be_valid, "expected #{delays.inspect} to be rejected"
           expect(project.errors[:delivery_retry_delays_seconds]).to be_present
@@ -78,7 +71,7 @@ describe Project, type: :model do
       end
 
       it 'rejects an empty retry schedule' do
-        project = build(:project, plan: 'pro', delivery_retry_delays_seconds: [])
+        project = build(:project, :pro, delivery_retry_delays_seconds: [])
 
         expect(project).not_to be_valid
         expect(project.errors[:delivery_retry_delays_seconds]).to be_present
@@ -86,38 +79,20 @@ describe Project, type: :model do
     end
   end
 
-  describe '#deliveries_used_in_period' do
-    context 'when the project has no metered usage' do
-      it 'returns zero' do
-        expect(project.deliveries_used_in_period).to eq(0)
+  describe '#plan' do
+    context 'when the billing owner is on the free plan' do
+      it 'reports the free plan' do
+        expect(project.plan).to eq(User::FREE_PLAN)
+        expect(project).not_to be_pro
       end
     end
 
-    context 'when the project has metered usage for the current month' do
-      before do
-        ProjectUsagePeriod.create!(
-          project: project,
-          period_starts_on: current_period_start,
-          deliveries_count: 7
-        )
-      end
+    context 'when the billing owner upgrades to the pro plan' do
+      it 'follows the billing owner plan' do
+        project.billing_owner.update!(plan: User::PRO_PLAN)
 
-      it 'returns the current period count' do
-        expect(project.deliveries_used_in_period).to eq(7)
-      end
-    end
-
-    context 'when the project has metered usage for another month' do
-      before do
-        ProjectUsagePeriod.create!(
-          project: project,
-          period_starts_on: current_period_start - 1.month,
-          deliveries_count: 12
-        )
-      end
-
-      it 'ignores the other period' do
-        expect(project.deliveries_used_in_period).to eq(0)
+        expect(project.reload.plan).to eq(User::PRO_PLAN)
+        expect(project).to be_pro
       end
     end
   end
@@ -144,7 +119,7 @@ describe Project, type: :model do
   end
 
   describe '#plan_locked_endpoint_ids' do
-    let(:endpoint_limit) { Plans::Entitlements.endpoint_limit(project) }
+    let(:endpoint_limit) { Plans::Entitlements.endpoint_limit(project.billing_owner) }
 
     context 'when the project is within its endpoint limit' do
       before { create_list(:endpoint, endpoint_limit, project: project) }
@@ -202,11 +177,11 @@ describe Project, type: :model do
       end
     end
 
-    context 'when the project is on the pro plan' do
-      let(:project) { create(:project, plan: Project::PRO_PLAN) }
+    context 'when the billing owner is on the pro plan' do
+      let(:project) { create(:project, :pro) }
 
       before do
-        create_list(:endpoint, Plans::Entitlements.definition_for(Project::FREE_PLAN).endpoint_limit, project: project)
+        create_list(:endpoint, Plans::Entitlements.definition_for(User::FREE_PLAN).endpoint_limit, project: project)
       end
 
       it 'locks no endpoint within the pro limit' do

@@ -12,11 +12,11 @@ module Plans
       admin_console
     ].freeze
 
-    Definition = Struct.new(:endpoint_limit, :monthly_delivery_limit, keyword_init: true)
+    Definition = Struct.new(:project_limit, :endpoint_limit, :monthly_delivery_limit, keyword_init: true)
 
     DEFINITIONS = {
-      Project::FREE_PLAN => Definition.new(endpoint_limit: 3, monthly_delivery_limit: 10_000),
-      Project::PRO_PLAN => Definition.new(endpoint_limit: 50, monthly_delivery_limit: 500_000)
+      User::FREE_PLAN => Definition.new(project_limit: 2, endpoint_limit: 3, monthly_delivery_limit: 10_000),
+      User::PRO_PLAN => Definition.new(project_limit: 10, endpoint_limit: 50, monthly_delivery_limit: 500_000)
     }.freeze
 
     class << self
@@ -24,12 +24,16 @@ module Plans
         DEFINITIONS.fetch(plan.to_s)
       end
 
-      def endpoint_limit(project)
-        definition_for(project.plan).endpoint_limit
+      def project_limit(account)
+        definition_for(account.plan).project_limit
       end
 
-      def monthly_delivery_limit(project)
-        definition_for(project.plan).monthly_delivery_limit
+      def endpoint_limit(account)
+        definition_for(account.plan).endpoint_limit
+      end
+
+      def monthly_delivery_limit(account)
+        definition_for(account.plan).monthly_delivery_limit
       end
     end
   end

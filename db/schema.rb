@@ -280,29 +280,17 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_29_110000) do
     t.index ["user_id"], name: "index_project_memberships_on_user_id"
   end
 
-  create_table "project_usage_periods", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
-    t.uuid "project_id", null: false
-    t.date "period_starts_on", null: false
-    t.integer "deliveries_count", default: 0, null: false
-    t.datetime "created_at", null: false
-    t.datetime "updated_at", null: false
-    t.index ["project_id", "period_starts_on"], name: "index_project_usage_periods_on_project_id_and_period_starts_on", unique: true
-    t.index ["project_id"], name: "index_project_usage_periods_on_project_id"
-    t.check_constraint "EXTRACT(day FROM period_starts_on) = 1::numeric", name: "project_usage_periods_period_starts_on_first_of_month"
-    t.check_constraint "deliveries_count >= 0", name: "project_usage_periods_deliveries_count_non_negative"
-  end
-
   create_table "projects", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.string "name", null: false
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
-    t.string "plan", default: "free", null: false
     t.integer "delivery_timeout_seconds"
     t.integer "delivery_retry_delays_seconds", array: true
+    t.uuid "billing_owner_id", null: false
+    t.index ["billing_owner_id"], name: "index_projects_on_billing_owner_id"
     t.check_constraint "delivery_retry_delays_seconds IS NULL OR (0 < ALL (delivery_retry_delays_seconds))", name: "projects_delivery_retry_delays_positive"
     t.check_constraint "delivery_retry_delays_seconds IS NULL OR cardinality(delivery_retry_delays_seconds) >= 1 AND cardinality(delivery_retry_delays_seconds) <= 7", name: "projects_delivery_retry_delays_size"
     t.check_constraint "delivery_timeout_seconds IS NULL OR delivery_timeout_seconds >= 1 AND delivery_timeout_seconds <= 30", name: "projects_delivery_timeout_seconds_range"
-    t.check_constraint "plan::text = ANY (ARRAY['free'::character varying, 'pro'::character varying]::text[])", name: "projects_plan_valid"
   end
 
   create_table "roles", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -313,6 +301,18 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_29_110000) do
     t.datetime "updated_at", null: false
     t.index ["name", "resource_type", "resource_id"], name: "index_roles_on_name_and_resource_type_and_resource_id"
     t.index ["resource_type", "resource_id"], name: "index_roles_on_resource"
+  end
+
+  create_table "user_usage_periods", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "user_id", null: false
+    t.date "period_starts_on", null: false
+    t.integer "deliveries_count", default: 0, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["user_id", "period_starts_on"], name: "index_user_usage_periods_on_user_id_and_period_starts_on", unique: true
+    t.index ["user_id"], name: "index_user_usage_periods_on_user_id"
+    t.check_constraint "EXTRACT(day FROM period_starts_on) = 1::numeric", name: "user_usage_periods_period_starts_on_first_of_month"
+    t.check_constraint "deliveries_count >= 0", name: "user_usage_periods_deliveries_count_non_negative"
   end
 
   create_table "users", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -333,9 +333,11 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_29_110000) do
     t.string "unconfirmed_email"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.string "plan", default: "free", null: false
     t.index ["confirmation_token"], name: "index_users_on_confirmation_token", unique: true
     t.index ["email"], name: "index_users_on_email", unique: true
     t.index ["reset_password_token"], name: "index_users_on_reset_password_token", unique: true
+    t.check_constraint "plan::text = ANY (ARRAY['free'::character varying, 'pro'::character varying]::text[])", name: "users_plan_valid"
   end
 
   create_table "users_roles", id: false, force: :cascade do |t|
@@ -370,5 +372,6 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_29_110000) do
   add_foreign_key "project_invitations", "users", column: "recipient_id", on_delete: :cascade
   add_foreign_key "project_memberships", "projects", on_delete: :cascade
   add_foreign_key "project_memberships", "users", on_delete: :cascade
-  add_foreign_key "project_usage_periods", "projects", on_delete: :cascade
+  add_foreign_key "projects", "users", column: "billing_owner_id", on_delete: :restrict
+  add_foreign_key "user_usage_periods", "users", on_delete: :cascade
 end

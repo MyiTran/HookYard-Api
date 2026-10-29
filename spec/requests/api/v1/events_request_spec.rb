@@ -89,28 +89,28 @@ describe 'Events', type: :request do
         post '/api/v1/events', params: event_params, headers: headers, as: :json
 
         expect(response).to have_http_status(:accepted)
-        expect(project.reload.deliveries_used_in_period).to eq(1)
+        expect(project.billing_owner.deliveries_used_in_period).to eq(1)
       end
     end
 
     context 'when the project reached its monthly delivery limit' do
       before do
-        limit = Plans::Entitlements.monthly_delivery_limit(project)
-        ProjectUsagePeriod.reserve_deliveries(project: project, quantity: limit, limit: limit)
+        limit = Plans::Entitlements.monthly_delivery_limit(project.billing_owner)
+        UserUsagePeriod.reserve_deliveries(user: project.billing_owner, quantity: limit, limit: limit)
       end
 
       it 'rejects the event with a payment required contract' do
         post '/api/v1/events', params: event_params, headers: headers, as: :json
 
         expect(response).to have_http_status(:payment_required)
-        limit = Plans::Entitlements.monthly_delivery_limit(project)
+        limit = Plans::Entitlements.monthly_delivery_limit(project.billing_owner)
         body = JSON.parse(response.body)
         expect(body['error']).to eq('plan_limit_exceeded')
         expect(body['message']).to eq("The #{project.plan} plan allows at most #{limit} deliveries per month")
         expect(body['status']).to eq(402)
         expect(body['used']).to eq(limit)
         expect(body['limit']).to eq(limit)
-        expect(body['period_ends']).to eq(ProjectUsagePeriod.period_ends_at.iso8601)
+        expect(body['period_ends']).to eq(UserUsagePeriod.period_ends_at.iso8601)
         expect(body['errors']).to contain_exactly(hash_including('field' => 'monthly_delivery_limit'))
       end
 
@@ -126,7 +126,7 @@ describe 'Events', type: :request do
       end
 
       it 'accepts the event again once the plan allows it' do
-        project.update!(plan: Project::PRO_PLAN)
+        project.billing_owner.update!(plan: User::PRO_PLAN)
 
         post '/api/v1/events', params: event_params, headers: headers, as: :json
 

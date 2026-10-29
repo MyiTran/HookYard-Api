@@ -2,6 +2,7 @@ require 'rails_helper'
 
 describe Events::Ingest, type: :operation do
   let(:project) { create(:project) }
+  let(:account) { project.billing_owner }
   let!(:endpoint) { create(:endpoint, project: project) }
   let(:attributes) do
     {
@@ -166,7 +167,7 @@ describe Events::Ingest, type: :operation do
 
         described_class.call(project: project, attributes: attributes)
 
-        expect(project.reload.deliveries_used_in_period).to eq(2)
+        expect(account.deliveries_used_in_period).to eq(2)
       end
     end
 
@@ -175,14 +176,14 @@ describe Events::Ingest, type: :operation do
         described_class.call(project: project, attributes: attributes)
         described_class.call(project: project, attributes: attributes)
 
-        expect(project.reload.deliveries_used_in_period).to eq(1)
+        expect(account.deliveries_used_in_period).to eq(1)
       end
 
       context 'when the monthly delivery limit is reached in between' do
         before do
           described_class.call(project: project, attributes: attributes)
-          limit = Plans::Entitlements.monthly_delivery_limit(project)
-          ProjectUsagePeriod.reserve_deliveries(project: project, quantity: limit - 1, limit: limit)
+          limit = Plans::Entitlements.monthly_delivery_limit(account)
+          UserUsagePeriod.reserve_deliveries(user: account, quantity: limit - 1, limit: limit)
         end
 
         it 'returns the accepted event instead of a payment required error' do
@@ -196,10 +197,10 @@ describe Events::Ingest, type: :operation do
     end
 
     context 'when the project reached the monthly delivery limit' do
-      let(:limit) { Plans::Entitlements.monthly_delivery_limit(project) }
+      let(:limit) { Plans::Entitlements.monthly_delivery_limit(account) }
 
       before do
-        ProjectUsagePeriod.reserve_deliveries(project: project, quantity: limit, limit: limit)
+        UserUsagePeriod.reserve_deliveries(user: account, quantity: limit, limit: limit)
       end
 
       it 'rejects the event with a payment required error' do
@@ -210,7 +211,7 @@ describe Events::Ingest, type: :operation do
             expect(error.errors).to contain_exactly(hash_including(field: 'monthly_delivery_limit'))
             expect(error.used).to eq(limit)
             expect(error.limit).to eq(limit)
-            expect(error.period_ends).to eq(ProjectUsagePeriod.period_ends_at)
+            expect(error.period_ends).to eq(UserUsagePeriod.period_ends_at)
           }
       end
 
@@ -221,7 +222,7 @@ describe Events::Ingest, type: :operation do
         expect(project.events.count).to eq(0)
         expect(Message.count).to eq(0)
         expect(project.endpoints.sum(:queued_message_count)).to eq(0)
-        expect(project.reload.deliveries_used_in_period).to eq(limit)
+        expect(account.deliveries_used_in_period).to eq(limit)
       end
 
       it 'records a durable ingest rejection for the project' do
@@ -248,8 +249,8 @@ describe Events::Ingest, type: :operation do
 
     context 'when the remaining monthly quota is smaller than the fan out' do
       before do
-        limit = Plans::Entitlements.monthly_delivery_limit(project)
-        ProjectUsagePeriod.reserve_deliveries(project: project, quantity: limit - 1, limit: limit)
+        limit = Plans::Entitlements.monthly_delivery_limit(account)
+        UserUsagePeriod.reserve_deliveries(user: account, quantity: limit - 1, limit: limit)
         create(:endpoint, project: project, event_types: [Endpoint::WILDCARD_EVENT_TYPE])
       end
 
@@ -257,23 +258,49 @@ describe Events::Ingest, type: :operation do
         expect { described_class.call(project: project, attributes: attributes) }
           .to raise_error(ApiError::PlanLimitExceededError)
 
-        expect(project.reload.deliveries_used_in_period).to eq(Plans::Entitlements.monthly_delivery_limit(project) - 1)
+        expect(account.deliveries_used_in_period).to eq(Plans::Entitlements.monthly_delivery_limit(account) - 1)
       end
     end
 
     context 'when the project is on the pro plan' do
-      let(:project) { create(:project, plan: Project::PRO_PLAN) }
+      let(:project) { create(:project, :pro) }
 
       before do
-        free_limit = Plans::Entitlements.definition_for(Project::FREE_PLAN).monthly_delivery_limit
-        ProjectUsagePeriod.reserve_deliveries(project: project, quantity: free_limit, limit: free_limit)
+        free_limit = Plans::Entitlements.definition_for(User::FREE_PLAN).monthly_delivery_limit
+        UserUsagePeriod.reserve_deliveries(user: account, quantity: free_limit, limit: free_limit)
       end
 
       it 'still meters and accepts deliveries beyond the free limit' do
         described_class.call(project: project, attributes: attributes)
 
-        expect(project.reload.deliveries_used_in_period)
-          .to eq(Plans::Entitlements.definition_for(Project::FREE_PLAN).monthly_delivery_limit + 1)
+        expect(account.deliveries_used_in_period)
+          .to eq(Plans::Entitlements.definition_for(User::FREE_PLAN).monthly_delivery_limit + 1)
+      end
+    end
+
+    context 'when the ingested project is owned by another account' do
+      let(:member) { create(:user) }
+
+      before { create(:project_membership, project: project, user: member, role: :maintainer) }
+
+      it 'meters the usage of the billing owner only' do
+        described_class.call(project: project, attributes: attributes)
+
+        expect(account.deliveries_used_in_period).to eq(1)
+        expect(member.deliveries_used_in_period).to eq(0)
+      end
+    end
+
+    context 'when the billing account owns several projects' do
+      let!(:sibling_project) { create(:project, :with_owner, owner: account) }
+
+      before { create(:endpoint, project: sibling_project, event_types: [Endpoint::WILDCARD_EVENT_TYPE]) }
+
+      it 'meters every project delivery against the same monthly account usage' do
+        described_class.call(project: project, attributes: attributes)
+        described_class.call(project: sibling_project, attributes: attributes.merge(idempotency_key: 'sibling-key'))
+
+        expect(account.deliveries_used_in_period).to eq(2)
       end
     end
   end

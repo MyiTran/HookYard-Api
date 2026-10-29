@@ -32,6 +32,10 @@ Rails.application.routes.draw do
 
       resource :cable_ticket, only: %i[create]
 
+      resource :account, only: [] do
+        patch :plan
+      end
+
       resources :events, only: %i[create]
 
       resources :messages, only: %i[index]
@@ -42,10 +46,6 @@ Rails.application.routes.draw do
       end
 
       resources :projects, only: %i[index show create update destroy] do
-        member do
-          patch :change_plan
-        end
-
         scope module: :projects do
           resources :memberships, only: %i[index destroy]
           resources :invitations, only: %i[index create destroy]
@@ -72,6 +72,10 @@ Rails.application.routes.draw do
 
       namespace :admin do
         resource :dashboard, only: %i[show]
+
+        resources :accounts, only: [] do
+          patch :plan, on: :member
+        end
       end
 
       resources :blobs, param: :signed_id, only: %i[create show]

@@ -13,13 +13,15 @@ module Endpoints
     private
 
     def ensure_endpoint_slot_available!(project)
-      limit = Plans::Entitlements.endpoint_limit(project)
-      return if project.endpoint_count < limit
+      account = project.billing_owner
+      limit = Plans::Entitlements.endpoint_limit(account)
+      used = project.endpoint_count
+      return if used < limit
 
       raise ApiError::PlanLimitExceededError.new(
-        message: "The #{project.plan} plan allows at most #{limit} endpoints",
+        message: "The #{account.plan} plan allows at most #{limit} endpoints per project",
         field: 'endpoint_limit',
-        used: project.endpoint_count,
+        used: used,
         limit: limit
       )
     end

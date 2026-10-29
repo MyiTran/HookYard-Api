@@ -15,10 +15,6 @@ class ProjectPolicy < ApplicationPolicy
     owner?
   end
 
-  def change_plan?
-    owner?
-  end
-
   def destroy?
     owner?
   end

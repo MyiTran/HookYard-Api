@@ -43,7 +43,7 @@ describe Messages::Deliver, type: :operation do
 
       expect(message.reload.status).to eq('pending')
       expect(message.next_retry_at).to be_present
-      expect(ProjectUsagePeriod.where(project_id: project.id)).to be_empty
+      expect(project.billing_owner.deliveries_used_in_period).to eq(0)
     end
   end
 
@@ -353,7 +353,8 @@ describe Messages::Deliver, type: :operation do
     end
 
     it 'uses the configured pro plan timeout' do
-      project.update!(plan: 'pro', delivery_timeout_seconds: 30)
+      project.billing_owner.update!(plan: User::PRO_PLAN)
+      project.update!(delivery_timeout_seconds: 30)
       allow(http_client).to receive(:post).and_return(http_result(status: 200))
 
       operation.call(message: message)
@@ -362,7 +363,8 @@ describe Messages::Deliver, type: :operation do
     end
 
     it 'uses the configured pro plan retry delays' do
-      project.update!(plan: 'pro', delivery_retry_delays_seconds: [3])
+      project.billing_owner.update!(plan: User::PRO_PLAN)
+      project.update!(delivery_retry_delays_seconds: [3])
       allow(http_client).to receive(:post).and_return(http_result(status: 503))
 
       operation.call(message: message)

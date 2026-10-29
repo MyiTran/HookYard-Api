@@ -6,15 +6,22 @@
 #  delivery_retry_delays_seconds :integer          is an Array
 #  delivery_timeout_seconds      :integer
 #  name                          :string           not null
-#  plan                          :string           default("free"), not null
 #  created_at                    :datetime         not null
 #  updated_at                    :datetime         not null
+#  billing_owner_id              :uuid             not null
+#
+# Indexes
+#
+#  index_projects_on_billing_owner_id  (billing_owner_id)
+#
+# Foreign Keys
+#
+#  fk_rails_...  (billing_owner_id => users.id) ON DELETE => restrict
 #
 class Project < ApplicationRecord
-  FREE_PLAN = 'free'
-  PRO_PLAN = 'pro'
-  PLANS = [FREE_PLAN, PRO_PLAN].freeze
   MAX_RETRY_DELAY_SLOTS = Webhooks::DeliveryPolicy::DEFAULT_RETRY_DELAYS.size
+
+  belongs_to :billing_owner, class_name: 'User', inverse_of: :owned_projects
 
   has_many :project_memberships, dependent: :destroy
   has_many :project_invitations, dependent: :destroy
@@ -22,11 +29,9 @@ class Project < ApplicationRecord
   has_many :events, dependent: :destroy
   has_many :endpoints, dependent: :destroy
   has_many :ingest_rejections, dependent: :destroy
-  has_many :usage_periods, class_name: 'ProjectUsagePeriod', dependent: :destroy
   has_many :users, through: :project_memberships
 
   validates :name, presence: true
-  validates :plan, inclusion: { in: PLANS }
   validates :delivery_timeout_seconds,
             numericality: {
               only_integer: true,
@@ -37,8 +42,10 @@ class Project < ApplicationRecord
   validate :delivery_overrides_require_pro_plan
   validate :retry_delays_must_be_positive_integers
 
+  delegate :plan, to: :billing_owner, allow_nil: true
+
   def pro?
-    plan == PRO_PLAN
+    plan == User::PRO_PLAN
   end
 
   def member?(user)
@@ -52,11 +59,7 @@ class Project < ApplicationRecord
   end
 
   def plan_locked_endpoint_ids
-    endpoints.not_archived.order(:created_at, :id).offset(Plans::Entitlements.endpoint_limit(self)).pluck(:id)
-  end
-
-  def deliveries_used_in_period(at = Time.current)
-    ProjectUsagePeriod.used_deliveries(project: self, at: at)
+    endpoints.not_archived.order(:created_at, :id).offset(Plans::Entitlements.endpoint_limit(billing_owner)).pluck(:id)
   end
 
   def owner

@@ -26,6 +26,22 @@ describe 'Projects', type: :request do
 
       expect(response).to have_http_status(:unauthorized)
     end
+
+    context 'when the account reached its project limit' do
+      before { create_list(:project, 2, :with_owner, owner: owner) }
+
+      it 'rejects the project with a payment required contract' do
+        post '/api/v1/projects', params: { project: { name: 'Alpha' } }, headers: auth_headers(owner), as: :json
+
+        expect(response).to have_http_status(:payment_required)
+        body = JSON.parse(response.body)
+        expect(body['error']).to eq('plan_limit_exceeded')
+        expect(body['used']).to eq(2)
+        expect(body['limit']).to eq(2)
+        expect(body['errors']).to contain_exactly(hash_including('field' => 'project_limit'))
+        expect(owner.owned_project_count).to eq(2)
+      end
+    end
   end
 
   describe 'GET /api/v1/projects' do
@@ -211,7 +227,7 @@ describe 'Projects', type: :request do
 
       it 'serializes the plan usage of every page without extra queries per project' do
         project
-        ProjectUsagePeriod.reserve_deliveries(project: project, quantity: 1, limit: 10_000)
+        UserUsagePeriod.reserve_deliveries(user: owner, quantity: 1, limit: 10_000)
 
         single_queries = sql_queries { get '/api/v1/projects', headers: auth_headers(maintainer) }
         create_list(:project, 4, :with_owner, owner: maintainer)
@@ -272,19 +288,19 @@ describe 'Projects', type: :request do
 
     it 'renders the plan limits and the metered usage of the current period' do
       create(:endpoint, project: project)
-      ProjectUsagePeriod.reserve_deliveries(project: project, quantity: 4, limit: 10_000)
+      UserUsagePeriod.reserve_deliveries(user: owner, quantity: 4, limit: 10_000)
 
       get "/api/v1/projects/#{project.id}", headers: auth_headers(maintainer)
 
       body = JSON.parse(response.body)
-      expect(body['plan']).to eq(Project::FREE_PLAN)
+      expect(body['plan']).to eq(User::FREE_PLAN)
       expect(body['endpoint_limit']).to eq(3)
       expect(body['monthly_delivery_limit']).to eq(10_000)
       expect(body['usage']['endpoint_count']).to eq(1)
       expect(body['usage']['deliveries_this_period']).to eq(4)
       expect(body['usage']['deliveries_remaining']).to eq(9_996)
-      expect(body['usage']['period_starts_at']).to eq(ProjectUsagePeriod.period_starts_at.iso8601)
-      expect(body['usage']['period_ends_at']).to eq(ProjectUsagePeriod.period_ends_at.iso8601)
+      expect(body['usage']['period_starts_at']).to eq(UserUsagePeriod.period_starts_at.iso8601)
+      expect(body['usage']['period_ends_at']).to eq(UserUsagePeriod.period_ends_at.iso8601)
     end
 
     it 'does not advertise unimplemented capabilities as enabled features' do
@@ -298,10 +314,10 @@ describe 'Projects', type: :request do
     end
 
     it 'never reports a negative remaining usage' do
-      ProjectUsagePeriod.reserve_deliveries(
-        project: project,
-        quantity: Plans::Entitlements.monthly_delivery_limit(project) + 5,
-        limit: Plans::Entitlements.monthly_delivery_limit(project) + 5
+      UserUsagePeriod.reserve_deliveries(
+        user: owner,
+        quantity: Plans::Entitlements.monthly_delivery_limit(owner) + 5,
+        limit: Plans::Entitlements.monthly_delivery_limit(owner) + 5
       )
 
       get "/api/v1/projects/#{project.id}", headers: auth_headers(maintainer)
@@ -310,54 +326,36 @@ describe 'Projects', type: :request do
     end
   end
 
-  describe 'PATCH /api/v1/projects/:id/change_plan' do
-    it 'lets the owner switch the project to the pro plan' do
-      patch "/api/v1/projects/#{project.id}/change_plan",
-            params: { project: { plan: Project::PRO_PLAN } }, headers: auth_headers(owner), as: :json
+  describe 'project plan limits' do
+    context 'when the billing owner is on the pro plan' do
+      before { owner.update!(plan: User::PRO_PLAN) }
 
-      expect(response).to have_http_status(:ok)
+      it 'applies the pro limits of the billing owner to every member' do
+        get "/api/v1/projects/#{project.id}", headers: auth_headers(maintainer)
+
+        body = JSON.parse(response.body)
+        expect(body['plan']).to eq(User::PRO_PLAN)
+        expect(body['endpoint_limit']).to eq(50)
+        expect(body['monthly_delivery_limit']).to eq(500_000)
+      end
+    end
+
+    it 'reports the metered usage of the billing account across its projects' do
+      sibling_project = create(:project, :with_owner, owner: owner)
+      UserUsagePeriod.reserve_deliveries(user: owner, quantity: 6, limit: 10_000)
+
+      get "/api/v1/projects/#{sibling_project.id}", headers: auth_headers(owner)
+
       body = JSON.parse(response.body)
-      expect(body['plan']).to eq(Project::PRO_PLAN)
-      expect(body['endpoint_limit']).to eq(50)
-      expect(body['monthly_delivery_limit']).to eq(500_000)
-      expect(project.reload.plan).to eq(Project::PRO_PLAN)
+      expect(body['usage']['deliveries_this_period']).to eq(6)
+      expect(body['usage']['deliveries_remaining']).to eq(9_994)
+      expect(body['usage']['endpoint_count']).to eq(0)
     end
 
-    it 'lets the owner switch back to the free plan' do
-      project.update!(plan: Project::PRO_PLAN)
-
-      patch "/api/v1/projects/#{project.id}/change_plan",
-            params: { project: { plan: Project::FREE_PLAN } }, headers: auth_headers(owner), as: :json
-
-      expect(response).to have_http_status(:ok)
-      body = JSON.parse(response.body)
-      expect(body['plan']).to eq(Project::FREE_PLAN)
-      expect(body['endpoint_limit']).to eq(3)
-      expect(body['monthly_delivery_limit']).to eq(10_000)
-      expect(project.reload.plan).to eq(Project::FREE_PLAN)
-    end
-
-    it 'rejects an unknown plan' do
-      patch "/api/v1/projects/#{project.id}/change_plan",
-            params: { project: { plan: 'enterprise' } }, headers: auth_headers(owner), as: :json
-
-      expect(response).to have_http_status(:unprocessable_entity)
-      expect(project.reload.plan).to eq(Project::FREE_PLAN)
-    end
-
-    it 'forbids a maintainer' do
-      patch "/api/v1/projects/#{project.id}/change_plan",
-            params: { project: { plan: Project::PRO_PLAN } }, headers: auth_headers(maintainer), as: :json
-
-      expect(response).to have_http_status(:forbidden)
-      expect(project.reload.plan).to eq(Project::FREE_PLAN)
-    end
-
-    it 'hides the project from a non-member' do
-      patch "/api/v1/projects/#{project.id}/change_plan",
-            params: { project: { plan: Project::PRO_PLAN } }, headers: auth_headers(outsider), as: :json
-
-      expect(response).to have_http_status(:not_found)
+    it 'does not expose the removed project plan route' do
+      expect do
+        Rails.application.routes.recognize_path("/api/v1/projects/#{project.id}/change_plan", method: :patch)
+      end.to raise_error(ActionController::RoutingError)
     end
   end
 

@@ -20,6 +20,7 @@
 #  unconfirmed_email      :string
 #  created_at             :datetime         not null
 #  updated_at             :datetime         not null
+#  plan                   :string           default("free"), not null
 #
 # Indexes
 #
@@ -28,9 +29,13 @@
 #  index_users_on_reset_password_token  (reset_password_token) UNIQUE
 #
 class User < ApplicationRecord
+  include Devise::JWT::RevocationStrategies::Allowlist
+
   rolify
 
-  include Devise::JWT::RevocationStrategies::Allowlist
+  FREE_PLAN = 'free'
+  PRO_PLAN = 'pro'
+  PLANS = [FREE_PLAN, PRO_PLAN].freeze
 
   devise :database_authenticatable, :registerable, :confirmable, :recoverable,
          :validatable, :trackable, :jwt_authenticatable, jwt_revocation_strategy: self
@@ -38,10 +43,14 @@ class User < ApplicationRecord
   has_one_attached :avatar
   has_many :project_memberships, dependent: :destroy
   has_many :projects, through: :project_memberships
+  has_many :owned_projects, class_name: 'Project', foreign_key: :billing_owner_id,
+                            inverse_of: :billing_owner, dependent: :restrict_with_error
+  has_many :usage_periods, class_name: 'UserUsagePeriod', dependent: :destroy
   has_many :notifications, dependent: :destroy
 
   validates :first_name, presence: true
   validates :last_name, presence: true
+  validates :plan, inclusion: { in: PLANS }
 
   def name
     "#{first_name} #{last_name}".strip
@@ -53,5 +62,17 @@ class User < ApplicationRecord
 
   def support?
     has_role?(:support)
+  end
+
+  def pro?
+    plan == PRO_PLAN
+  end
+
+  def owned_project_count
+    owned_projects.count
+  end
+
+  def deliveries_used_in_period(at = Time.current)
+    UserUsagePeriod.used_deliveries(user: self, at: at)
   end
 end
