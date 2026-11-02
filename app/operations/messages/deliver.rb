@@ -11,22 +11,15 @@ module Messages
 
     def call(message:)
       @message = message
-      message.reload
-      return message if message.terminal?
 
       claim = claim_attempt
 
       return reschedule_after_capacity(claim) if claim.outcome == :capacity_full
-      return message.reload unless claim.outcome == :claimed
+      return message unless claim.outcome == :claimed
 
-      result = http_client.post(
-        url: claim.attempt.request_url,
-        headers: claim.attempt.request_headers,
-        body: claim.attempt.request_body
-      )
-      finalize(claim, result)
+      finalize(claim, post_attempt(claim))
 
-      message.reload
+      message
     end
 
     private
@@ -84,11 +77,8 @@ module Messages
       attributes = build_attempt_attributes(secret, attempt_number)
       return Claim.new(outcome: :failed) if attributes.nil?
 
-      message.mark_delivering!(
-        lease_expires_at: Time.current + Webhooks::DeliveryPolicy.delivery_lease_duration,
-        attempt_count: attempt_number
-      )
-      lease_expires_at = message.reload.delivery_lease_expires_at
+      lease_expires_at = Time.current + Webhooks::DeliveryPolicy.delivery_lease_duration
+      message.mark_delivering!(lease_expires_at: lease_expires_at, attempt_count: attempt_number)
       attempt = message.delivery_attempts.create!(attributes)
 
       Claim.new(outcome: :claimed, attempt: attempt, lease_expires_at: lease_expires_at)
@@ -162,19 +152,29 @@ module Messages
       (message.delivery_attempts.maximum(:attempt_number) || 0) + 1
     end
 
+    def post_attempt(claim)
+      http_client.post(
+        url: claim.attempt.request_url,
+        headers: claim.attempt.request_headers,
+        body: claim.attempt.request_body
+      )
+    end
+
     def finalize(claim, result)
       retry_at = nil
+      finalized = false
 
       DeliveryAttempt.transaction do
         message.with_lock do
-          message.reload
           next if superseded?(claim)
 
           retry_at = record_result(claim.attempt, result)
+          finalized = true
         end
       end
 
       enqueue_retry(retry_at) if retry_at
+      message.reload unless finalized
     end
 
     def superseded?(claim)
@@ -233,7 +233,7 @@ module Messages
 
     def reschedule_after_capacity(claim)
       enqueue_retry(claim.retry_at)
-      message.reload
+      message
     end
 
     def enqueue_retry(at)

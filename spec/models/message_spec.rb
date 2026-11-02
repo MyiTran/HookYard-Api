@@ -159,6 +159,44 @@ describe Message, type: :model do
     end
   end
 
+  describe '#lease_active?' do
+    it 'is true only while the lease expiry is in the future' do
+      expect(build(:message, delivery_lease_expires_at: 1.minute.from_now).lease_active?).to be(true)
+      expect(build(:message, delivery_lease_expires_at: 1.minute.ago).lease_active?).to be(false)
+      expect(build(:message, delivery_lease_expires_at: nil).lease_active?).to be(false)
+    end
+  end
+
+  describe '#mark_delivering!' do
+    it 'claims the message with a lease and clears the retry schedule' do
+      message.update_columns(next_retry_at: 1.minute.from_now, terminal_at: 1.minute.ago)
+      lease_expires_at = 1.minute.from_now
+
+      message.mark_delivering!(lease_expires_at: lease_expires_at, attempt_count: 2)
+
+      expect(message.reload.status).to eq('delivering')
+      expect(message.attempt_count).to eq(2)
+      expect(message.delivery_lease_expires_at).to eq(lease_expires_at)
+      expect(message.next_retry_at).to be_nil
+      expect(message.terminal_at).to be_nil
+    end
+  end
+
+  describe '#mark_failed!' do
+    it 'stores the terminal state and releases the lease' do
+      message.update_columns(status: 'delivering', delivery_lease_expires_at: 1.minute.from_now)
+      failed_at = Time.current
+
+      message.mark_failed!(at: failed_at)
+
+      expect(message.reload.status).to eq('failed')
+      expect(message).to be_terminal
+      expect(message.terminal_at).to eq(failed_at)
+      expect(message.next_retry_at).to be_nil
+      expect(message.delivery_lease_expires_at).to be_nil
+    end
+  end
+
   describe '#mark_succeeded!' do
     it 'stores the terminal state and releases the lease' do
       message.update_columns(status: 'delivering', attempt_count: 1, delivery_lease_expires_at: 1.minute.from_now)

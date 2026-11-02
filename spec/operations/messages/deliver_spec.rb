@@ -48,6 +48,19 @@ describe Messages::Deliver, type: :operation do
     active_message
   end
 
+  describe '.call' do
+    it 'delivers through the public operation api with the default dependencies' do
+      allow(Webhooks::HttpClient).to receive(:new).and_return(http_client)
+      allow(http_client).to receive(:post).and_return(http_result(status: 200))
+
+      described_class.call(message: message)
+
+      expect(message.reload.status).to eq('succeeded')
+      expect(http_client).to have_received(:post).once
+      expect(message.delivery_attempts.sole.response_status).to eq(200)
+    end
+  end
+
   describe 'request evidence' do
     before do
       allow(http_client).to receive(:post) do |url:, headers:, body:|
@@ -265,7 +278,7 @@ describe Messages::Deliver, type: :operation do
 
     it 'does not send again once the message succeeded' do
       deliver(http_result(status: 200))
-      operation.call(message: Message.find(message.id))
+      described_class.new(http_client: http_client, signer: signer).call(message: Message.find(message.id))
 
       expect(http_client).to have_received(:post).once
       expect(message.delivery_attempts.count).to eq(1)
@@ -398,20 +411,20 @@ describe Messages::Deliver, type: :operation do
 
   describe 'attempt exhaustion' do
     it 'terminally fails after the last attempt' do
-      (Webhooks::DeliveryPolicy::MAX_ATTEMPTS - 1).times do |index|
+      stub_const('Webhooks::DeliveryPolicy::MAX_ATTEMPTS', 3)
+      2.times do |index|
         create(:delivery_attempt, message: message, attempt_number: index + 1, response_status: 500)
       end
-      message.update_columns(attempt_count: Webhooks::DeliveryPolicy::MAX_ATTEMPTS - 1)
+      message.update_columns(attempt_count: 2)
 
       deliver(http_result(status: 503))
 
-      expect(Webhooks::DeliveryPolicy::MAX_ATTEMPTS).to eq(8)
       expect(message.reload.status).to eq('failed')
-      expect(message.attempt_count).to eq(Webhooks::DeliveryPolicy::MAX_ATTEMPTS)
+      expect(message.attempt_count).to eq(3)
       expect(message.next_retry_at).to be_nil
       expect(message.delivery_lease_expires_at).to be_nil
       expect(message.terminal_at).to eq(Time.current)
-      expect(message.delivery_attempts.count).to eq(Webhooks::DeliveryPolicy::MAX_ATTEMPTS)
+      expect(message.delivery_attempts.count).to eq(3)
     end
 
     it 'does not deliver a message that already used every attempt' do

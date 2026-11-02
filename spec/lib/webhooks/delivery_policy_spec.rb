@@ -1,36 +1,59 @@
 require 'rails_helper'
 
 describe Webhooks::DeliveryPolicy, type: :model do
-  describe '.retry_delay' do
-    {
-      1 => 5.seconds,
-      2 => 5.minutes,
-      3 => 30.minutes,
-      4 => 2.hours,
-      5 => 5.hours,
-      6 => 10.hours,
-      7 => 10.hours
-    }.each do |attempts_made, base_delay|
-      it "waits about #{base_delay.inspect} after attempt #{attempts_made}" do
-        expect(described_class.retry_delay(attempts_made)).to be_between(base_delay, base_delay * 1.2)
-      end
+  describe 'production contract' do
+    it 'allows eight total attempts' do
+      expect(described_class::MAX_ATTEMPTS).to eq(8)
     end
 
-    it 'schedules the whole eight attempt lifecycle' do
-      expect(described_class::MAX_ATTEMPTS).to eq(8)
+    it 'keeps the documented retry schedule of seven delays' do
+      expect(described_class::RETRY_DELAYS).to eq(
+        [5.seconds, 5.minutes, 30.minutes, 2.hours, 5.hours, 10.hours, 10.hours]
+      )
       expect(described_class::RETRY_DELAYS.size).to eq(described_class::MAX_ATTEMPTS - 1)
     end
 
-    it 'never returns a delay earlier than the base schedule' do
-      100.times do
-        expect(described_class.retry_delay(2)).to be >= 5.minutes
+    it 'bounds the jitter to twenty percent' do
+      expect(described_class::JITTER_RATIO).to eq(0.2)
+    end
+
+    it 'allows a fifteen second http timeout' do
+      expect(described_class::HTTP_TIMEOUT_SECONDS).to eq(15)
+      expect(described_class.delivery_lease_duration).to eq(60.seconds)
+    end
+
+    it 'allows three concurrent deliveries per endpoint' do
+      expect(described_class::MAX_ACTIVE_DELIVERIES_PER_ENDPOINT).to eq(3)
+    end
+  end
+
+  describe '.retry_delay' do
+    it 'returns the exact base schedule when the jitter source is zero' do
+      allow(described_class).to receive(:rand).and_return(0.0)
+
+      {
+        1 => 5.seconds,
+        2 => 5.minutes,
+        3 => 30.minutes,
+        4 => 2.hours,
+        5 => 5.hours,
+        6 => 10.hours,
+        7 => 10.hours
+      }.each do |attempts_made, base_delay|
+        expect(described_class.retry_delay(attempts_made)).to eq(base_delay)
       end
     end
 
-    it 'never exceeds the bounded jitter window' do
-      100.times do
-        expect(described_class.retry_delay(2)).to be < 5.minutes * 1.2
-      end
+    it 'applies the bounded jitter on top of the base schedule' do
+      allow(described_class).to receive(:rand).and_return(0.5)
+
+      expect(described_class.retry_delay(2)).to eq(5.minutes * 1.1)
+
+      allow(described_class).to receive(:rand).and_return(0.999)
+      delayed = described_class.retry_delay(2)
+
+      expect(delayed).to be > 5.minutes
+      expect(delayed).to be < 5.minutes * 1.2
     end
 
     it 'returns nil once every attempt has been used' do
@@ -42,26 +65,31 @@ describe Webhooks::DeliveryPolicy, type: :model do
       expect(described_class.retry_delay(0)).to be_nil
       expect(described_class.retry_delay(-1)).to be_nil
     end
-  end
 
-  describe 'delivery timing' do
-    it 'allows a 15 second http timeout by default' do
-      expect(described_class::HTTP_TIMEOUT_SECONDS).to eq(15)
-      expect(described_class.delivery_lease_duration).to eq(60.seconds)
-    end
+    context 'when a smaller attempt limit is stubbed for a unit test' do
+      it 'stops scheduling retries at the stubbed limit' do
+        stub_const('Webhooks::DeliveryPolicy::MAX_ATTEMPTS', 5)
+        allow(described_class).to receive(:rand).and_return(0.0)
 
-    it 'allows three concurrent deliveries per endpoint' do
-      expect(described_class::MAX_ACTIVE_DELIVERIES_PER_ENDPOINT).to eq(3)
+        expect(described_class.retry_delay(4)).to eq(2.hours)
+        expect(described_class.retry_delay(5)).to be_nil
+      end
     end
   end
 
   describe '.capacity_retry_delay' do
-    it 'returns a short positive jittered delay' do
-      100.times do
-        delay = described_class.capacity_retry_delay
+    it 'returns the base capacity delay without jitter' do
+      allow(described_class).to receive(:rand).and_return(0.0)
 
-        expect(delay).to be_between(described_class::CAPACITY_RETRY_DELAY, described_class::CAPACITY_RETRY_DELAY * 1.2)
-      end
+      expect(described_class.capacity_retry_delay).to eq(described_class::CAPACITY_RETRY_DELAY)
+    end
+
+    it 'stays inside the bounded jitter window' do
+      allow(described_class).to receive(:rand).and_return(0.999)
+      delayed = described_class.capacity_retry_delay
+
+      expect(delayed).to be > described_class::CAPACITY_RETRY_DELAY
+      expect(delayed).to be < described_class::CAPACITY_RETRY_DELAY * 1.2
     end
   end
 
