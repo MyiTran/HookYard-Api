@@ -93,11 +93,8 @@ module Messages
       attributes = build_attempt_attributes(secret, attempt_number)
       return failed_claim if attributes.nil?
 
-      message.mark_delivering!(
-        lease_expires_at: Time.current + Webhooks::DeliveryPolicy.delivery_lease_duration,
-        attempt_count: attempt_number
-      )
-      lease_expires_at = message.reload.delivery_lease_expires_at
+      lease_expires_at = Time.current + Webhooks::DeliveryPolicy.delivery_lease_duration
+      message.mark_delivering!(lease_expires_at: lease_expires_at, attempt_count: attempt_number)
       attempt = message.delivery_attempts.create!(attributes)
 
       Claim.new(outcome: :claimed, attempt: attempt, lease_expires_at: lease_expires_at)
@@ -205,7 +202,6 @@ module Messages
       recorded = false
 
       message.with_lock do
-        message.reload
         next if superseded?(claim)
 
         yield record_result(claim.attempt, result)

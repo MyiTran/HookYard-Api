@@ -7,20 +7,6 @@ class AddDeliveryRetryFieldsToMessages < ActiveRecord::Migration[8.0]
 
     add_check_constraint :messages, 'attempt_count >= 0', name: 'messages_attempt_count_non_negative'
 
-    execute <<~SQL.squish
-      UPDATE messages
-      SET attempt_count = COALESCE(
-        (SELECT COUNT(*) FROM delivery_attempts WHERE delivery_attempts.message_id = messages.id),
-        0
-      )
-    SQL
-
-    execute <<~SQL.squish
-      UPDATE messages
-      SET terminal_at = updated_at
-      WHERE status IN ('succeeded', 'failed')
-    SQL
-
     add_index :messages, %i[status next_retry_at], name: 'index_messages_on_status_and_next_retry_at'
     add_index :messages, %i[endpoint_id status delivery_lease_expires_at],
               name: 'index_messages_on_endpoint_status_and_lease'

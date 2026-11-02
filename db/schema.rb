@@ -52,18 +52,6 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_27_120200) do
     t.index ["user_id"], name: "index_allowlisted_jwts_on_user_id"
   end
 
-  create_table "api_credentials", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
-    t.uuid "project_id", null: false
-    t.string "name", null: false
-    t.string "token_prefix", null: false
-    t.string "token_digest", null: false
-    t.datetime "revoked_at"
-    t.datetime "created_at", null: false
-    t.datetime "updated_at", null: false
-    t.index ["project_id"], name: "index_api_credentials_on_project_id"
-    t.index ["token_digest"], name: "index_api_credentials_on_token_digest", unique: true
-  end
-
   create_table "cable_tickets", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.uuid "user_id", null: false
     t.string "token", null: false
@@ -337,7 +325,6 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_27_120200) do
   add_foreign_key "active_storage_attachments", "active_storage_blobs", column: "blob_id"
   add_foreign_key "active_storage_variant_records", "active_storage_blobs", column: "blob_id"
   add_foreign_key "allowlisted_jwts", "users", on_delete: :cascade
-  add_foreign_key "api_credentials", "projects", on_delete: :cascade
   add_foreign_key "cable_tickets", "users", on_delete: :cascade
   add_foreign_key "circuit_probes", "endpoints", on_delete: :cascade
   add_foreign_key "delivery_attempts", "messages", on_delete: :cascade

@@ -45,7 +45,7 @@ module Webhooks
 
     def resolve_addresses(hostname)
       Timeout.timeout(timeout) { Resolv.getaddresses(hostname).filter_map { |address| parse_ip(address) } }
-    rescue Timeout::Error, Resolv::ResolvError
+    rescue Timeout::Error, Resolv::ResolvError, SocketError
       raise ResolutionFailed, RESOLUTION_FAILED_MESSAGE
     end
 
