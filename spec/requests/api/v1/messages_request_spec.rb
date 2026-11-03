@@ -87,6 +87,50 @@ describe 'Messages', type: :request do
 
         expect(endpoint_payload.keys).to contain_exactly('id', 'name', 'url')
       end
+
+      it 'finds a message by its exact message id' do
+        message
+        other = create(:message, project: project)
+
+        get '/api/v1/messages', params: { message_id: other.id }, headers: auth_headers(owner)
+
+        expect(json_response['data'].map { |entry| entry['id'] }).to contain_exactly(other.id)
+      end
+
+      it 'finds messages by an exact request id without duplicates' do
+        create(:delivery_attempt, message: message, attempt_number: 1, request_id: 'req-lookup')
+        create(:delivery_attempt, message: message, attempt_number: 2, request_id: 'req-lookup')
+
+        get '/api/v1/messages', params: { request_id: 'req-lookup' }, headers: auth_headers(owner)
+
+        expect(json_response['data'].map { |entry| entry['id'] }).to contain_exactly(message.id)
+        expect(json_response['meta']['total_count']).to eq(1)
+      end
+
+      it 'never matches another project through the request id search' do
+        outsider_message = create(:message, project: create(:project, :with_owner, owner: outsider))
+        create(:delivery_attempt, message: outsider_message, request_id: 'req-outsider')
+
+        get '/api/v1/messages', params: { request_id: 'req-outsider' }, headers: auth_headers(owner)
+
+        expect(json_response['data']).to be_empty
+      end
+
+      it 'combines the endpoint, event type and utc created-at filters' do
+        message.update_columns(created_at: Time.zone.local(2026, 10, 1, 12, 0, 0))
+        create(:message, project: project, event: create(:event, project: project, event_type: 'invoice.paid'))
+
+        get '/api/v1/messages',
+            params: {
+              endpoint_id: endpoint.id,
+              event_type: 'order.created',
+              from: '2026-10-01T00:00:00Z',
+              to: '2026-10-02T00:00:00Z'
+            },
+            headers: auth_headers(owner)
+
+        expect(json_response['data'].map { |entry| entry['id'] }).to contain_exactly(message.id)
+      end
     end
 
     context 'when filtering by delivery state' do
@@ -278,6 +322,61 @@ describe 'Messages', type: :request do
         expect(json_response['terminal_at']).to be_present
         expect(json_response['retryable']).to be(false)
         expect(json_response.keys).not_to include('delivery_lease_expires_at')
+      end
+
+      it 'redacts credential headers, timing headers and secret query values from the evidence' do
+        create(
+          :delivery_attempt,
+          message: message,
+          response_status: 200,
+          request_url: 'https://hooks.test/path?token=secret-token&tenant=acme',
+          request_headers: {
+            'content-type' => 'application/json',
+            'webhook-signature' => 'v1,secret-signature',
+            'authorization' => 'Bearer secret-bearer'
+          },
+          response_headers: {
+            'content-type' => 'application/json',
+            'server-timing' => 'sql;dur=12',
+            'set-cookie' => 'session=1'
+          }
+        )
+
+        get "/api/v1/projects/#{project.id}/messages/#{message.id}", headers: auth_headers(owner)
+
+        attempt = json_response['attempts'].first
+        expect(attempt['request_url']).to eq('https://hooks.test/path?token=[REDACTED]&tenant=acme')
+        expect(attempt['request_headers']).to eq('content-type' => 'application/json')
+        expect(attempt['response_headers']).to eq('content-type' => 'application/json')
+        expect(response.body).not_to include('secret-token', 'secret-signature', 'secret-bearer', 'server-timing')
+      end
+
+      it 'marks a body removed by retention instead of reporting a missing body' do
+        purged_at = Time.zone.local(2026, 11, 1, 2, 30, 0)
+        create(
+          :delivery_attempt,
+          message: message,
+          response_status: 200,
+          request_body: nil,
+          response_body: nil,
+          bodies_purged_at: purged_at
+        )
+        create(
+          :delivery_attempt,
+          message: message,
+          attempt_number: 2,
+          error_type: 'Net::ReadTimeout',
+          error_message: 'execution expired'
+        )
+
+        get "/api/v1/projects/#{project.id}/messages/#{message.id}", headers: auth_headers(owner)
+
+        purged, timed_out = json_response['attempts']
+        expect(purged['bodies_purged_at']).to be_present
+        expect(purged['request_body']).to be_nil
+        expect(purged['response_status']).to eq(200)
+        expect(timed_out['bodies_purged_at']).to be_nil
+        expect(timed_out['response_body']).to be_nil
       end
     end
 

@@ -13,6 +13,7 @@
 #
 # Indexes
 #
+#  index_ingest_rejections_on_created_at_and_id          (created_at,id)
 #  index_ingest_rejections_on_endpoint_id                (endpoint_id)
 #  index_ingest_rejections_on_project_id                 (project_id)
 #  index_ingest_rejections_on_project_id_and_created_at  (project_id,created_at)

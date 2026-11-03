@@ -9,6 +9,7 @@ describe Plans::Entitlements do
         expect(definition.project_limit).to eq(2)
         expect(definition.endpoint_limit).to eq(3)
         expect(definition.monthly_delivery_limit).to eq(10_000)
+        expect(definition.body_retention_days).to eq(3)
       end
     end
 
@@ -19,6 +20,7 @@ describe Plans::Entitlements do
         expect(definition.project_limit).to eq(10)
         expect(definition.endpoint_limit).to eq(50)
         expect(definition.monthly_delivery_limit).to eq(500_000)
+        expect(definition.body_retention_days).to eq(30)
       end
     end
 
@@ -31,7 +33,9 @@ describe Plans::Entitlements do
 
   describe 'exposed entitlements' do
     it 'only exposes limits that are enforced today' do
-      expect(described_class::Definition.members).to contain_exactly(:project_limit, :endpoint_limit, :monthly_delivery_limit)
+      expect(described_class::Definition.members).to contain_exactly(
+        :project_limit, :endpoint_limit, :monthly_delivery_limit, :body_retention_days
+      )
     end
 
     it 'keeps unreleased capabilities out of the exposed entitlements' do
@@ -67,6 +71,16 @@ describe Plans::Entitlements do
 
       expect(described_class.monthly_delivery_limit(free_account)).to eq(10_000)
       expect(described_class.monthly_delivery_limit(pro_account)).to eq(500_000)
+    end
+  end
+
+  describe '.body_retention_days' do
+    it 'reads the delivery body retention window of the account plan' do
+      free_account = build(:user, plan: User::FREE_PLAN)
+      pro_account = build(:user, plan: User::PRO_PLAN)
+
+      expect(described_class.body_retention_days(free_account)).to eq(3)
+      expect(described_class.body_retention_days(pro_account)).to eq(30)
     end
   end
 end

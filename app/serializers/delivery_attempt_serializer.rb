@@ -1,17 +1,23 @@
 class DeliveryAttemptSerializer < ApplicationSerializer
-  REDACTED_REQUEST_HEADERS = %w[webhook-signature].freeze
-
   identifier :id
 
   fields :status, :attempt_number, :request_id, :webhook_id, :signing_secret_version, :signed_at, :created_at,
-         :request_url, :http_method, :request_body, :response_status, :response_headers, :response_body,
-         :duration_ms, :error_type, :error_message
+         :http_method, :request_body, :response_status, :response_body,
+         :duration_ms, :error_type, :error_message, :bodies_purged_at
 
   field :failure_category do |attempt|
     attempt.failure_category
   end
 
+  field :request_url do |attempt|
+    Webhooks::EvidenceSanitizer.sanitize_url(attempt.request_url)
+  end
+
   field :request_headers do |attempt|
-    attempt.request_headers.to_h.except(*REDACTED_REQUEST_HEADERS)
+    Webhooks::EvidenceSanitizer.sanitize_headers(attempt.request_headers)
+  end
+
+  field :response_headers do |attempt|
+    Webhooks::EvidenceSanitizer.sanitize_headers(attempt.response_headers)
   end
 end

@@ -5,6 +5,8 @@ module Api
         scope = MessagesQuery.call(
           policy_scope(Message),
           q: params[:q],
+          message_id: params[:message_id],
+          request_id: params[:request_id],
           project_id: params[:project_id],
           endpoint_id: params[:endpoint_id],
           status: params[:status],
