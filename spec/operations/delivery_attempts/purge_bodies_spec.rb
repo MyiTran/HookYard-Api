@@ -21,10 +21,6 @@ describe DeliveryAttempts::PurgeBodies, type: :operation do
     )
   end
 
-  def attempt_count_with_bodies
-    DeliveryAttempt.where(request_body: nil, response_body: nil).count
-  end
-
   describe '.call' do
     context 'when the billing owner is on the free plan' do
       let(:project) { create(:project, :with_owner, owner: create(:user, plan: User::FREE_PLAN)) }
@@ -164,6 +160,51 @@ describe DeliveryAttempts::PurgeBodies, type: :operation do
         expect(attempts.map { |attempt| attempt.reload.bodies_purged_at }).to all(eq(now))
         expect(statements.grep(/\AUPDATE/).size).to eq(1)
         expect(statements.grep(/\ASELECT/).size).to eq(2)
+      end
+    end
+
+    context 'when another worker purges a selected record first' do
+      let(:project) { create(:project, :with_owner, owner: create(:user, plan: User::FREE_PLAN)) }
+      let!(:already_purged) { create_attempt(project: project, created_at: now - 4.days) }
+      let!(:still_pending) { create_attempt(project: project, created_at: now - 4.days) }
+      let(:other_run_at) { now - 1.hour }
+      let(:stale_batch_ids) { [already_purged.id, still_pending.id] }
+
+      before { described_class.new.send(:purge, [already_purged.id], other_run_at) }
+
+      it 'counts only the records it actually purged' do
+        expect(described_class.new.send(:purge, stale_batch_ids, now)).to eq(1)
+      end
+
+      it 'does not overwrite the marker or the metadata of the record purged by the other worker' do
+        snapshot = already_purged.reload.attributes
+
+        described_class.new.send(:purge, stale_batch_ids, now)
+
+        expect(already_purged.reload.attributes).to eq(snapshot)
+        expect(already_purged.bodies_purged_at).to eq(other_run_at)
+      end
+
+      it 'purges the record that is still eligible when the batch was collected' do
+        described_class.new.send(:purge, stale_batch_ids, now)
+
+        expect(still_pending.reload.bodies_purged_at).to eq(now)
+        expect(still_pending.request_body).to be_nil
+        expect(still_pending.response_body).to be_nil
+      end
+    end
+
+    context 'when a stale batch still contains an attempt that never completed' do
+      let(:project) { create(:project, :with_owner, owner: create(:user, plan: User::FREE_PLAN)) }
+      let!(:in_flight) { create_attempt(project: project, created_at: now - 10.days, response_status: nil) }
+
+      it 'never purges it and reports zero purged rows' do
+        expect(described_class.new.send(:purge, [in_flight.id], now)).to eq(0)
+
+        in_flight.reload
+        expect(in_flight.request_body).to eq('{"id":"evt"}')
+        expect(in_flight.response_body).to eq('ok')
+        expect(in_flight.bodies_purged_at).to be_nil
       end
     end
 

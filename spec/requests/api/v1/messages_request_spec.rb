@@ -351,6 +351,33 @@ describe 'Messages', type: :request do
         expect(response.body).not_to include('secret-token', 'secret-signature', 'secret-bearer', 'server-timing')
       end
 
+      it 'redacts secrets inside the JSON request and response bodies' do
+        create(
+          :delivery_attempt,
+          message: message,
+          response_status: 200,
+          request_body: {
+            'id' => 'evt_1',
+            'token' => 'request-token-value',
+            'data' => { 'password' => 'request-password', 'order_id' => 'order_1' }
+          }.to_json,
+          response_body: { 'access_token' => 'response-token-value', 'ok' => true }.to_json
+        )
+
+        get "/api/v1/projects/#{project.id}/messages/#{message.id}", headers: auth_headers(owner)
+
+        attempt = json_response['attempts'].first
+        expect(JSON.parse(attempt['request_body'])).to eq(
+          'id' => 'evt_1',
+          'token' => '[REDACTED]',
+          'data' => { 'password' => '[REDACTED]', 'order_id' => 'order_1' }
+        )
+        expect(JSON.parse(attempt['response_body'])).to eq(
+          'access_token' => '[REDACTED]', 'ok' => true
+        )
+        expect(response.body).not_to include('request-token-value', 'request-password', 'response-token-value')
+      end
+
       it 'marks a body removed by retention instead of reporting a missing body' do
         purged_at = Time.zone.local(2026, 11, 1, 2, 30, 0)
         create(
@@ -374,6 +401,7 @@ describe 'Messages', type: :request do
         purged, timed_out = json_response['attempts']
         expect(purged['bodies_purged_at']).to be_present
         expect(purged['request_body']).to be_nil
+        expect(purged['response_body']).to be_nil
         expect(purged['response_status']).to eq(200)
         expect(timed_out['bodies_purged_at']).to be_nil
         expect(timed_out['response_body']).to be_nil

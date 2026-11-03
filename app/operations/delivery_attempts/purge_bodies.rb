@@ -45,12 +45,15 @@ module DeliveryAttempts
     end
 
     def purge(ids, now)
-      DeliveryAttempt.where(id: ids).update_all(
-        request_body: nil,
-        response_body: nil,
-        bodies_purged_at: now,
-        updated_at: now
-      )
+      DeliveryAttempt
+        .where(id: ids, bodies_purged_at: nil)
+        .where('delivery_attempts.response_status IS NOT NULL OR delivery_attempts.error_type IS NOT NULL')
+        .update_all(
+          request_body: nil,
+          response_body: nil,
+          bodies_purged_at: now,
+          updated_at: now
+        )
     end
 
     def retention_days(plan)
