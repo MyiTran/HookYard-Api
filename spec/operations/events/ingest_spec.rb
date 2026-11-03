@@ -289,6 +289,34 @@ describe Events::Ingest, type: :operation do
       end
     end
 
+    context 'when the request starts just before a UTC month boundary' do
+      let(:limit) { Plans::Entitlements.monthly_delivery_limit(account) }
+      let(:boundary) { Time.utc(2026, 11, 1) }
+      let(:just_before_boundary) { boundary - 1.second }
+
+      before do
+        UserUsagePeriod.reserve_deliveries(
+          user: account, quantity: limit, limit: limit, at: just_before_boundary
+        )
+      end
+
+      it 'reports the usage and reset time of the period the request started in' do
+        travel_to(just_before_boundary) do
+          allow(UserUsagePeriod).to receive(:reserve_deliveries).and_wrap_original do |original, **kwargs|
+            original.call(**kwargs).tap { travel(1.second) }
+          end
+
+          expect { described_class.call(project: project, attributes: attributes) }
+            .to raise_error(ApiError::PlanLimitExceededError) { |error|
+              expect(error.used).to eq(limit)
+              expect(error.period_ends).to eq(boundary)
+            }
+        end
+
+        expect(UserUsagePeriod.where(user: account, period_starts_on: boundary.to_date)).to be_empty
+      end
+    end
+
     context 'when the remaining monthly quota is smaller than the fan out' do
       before do
         limit = Plans::Entitlements.monthly_delivery_limit(account)

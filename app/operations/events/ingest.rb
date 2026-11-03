@@ -71,16 +71,18 @@ module Events
     end
 
     def reserve_delivery_quota!(project, deliveries)
+      now = Time.current
       account = project.billing_owner
       limit = Plans::Entitlements.monthly_delivery_limit(account)
-      return if UserUsagePeriod.reserve_deliveries(user: account, quantity: deliveries, limit: limit)
+
+      return if UserUsagePeriod.reserve_deliveries(user: account, quantity: deliveries, limit: limit, at: now)
 
       raise ApiError::PlanLimitExceededError.new(
         message: "The #{account.plan} plan allows at most #{limit} deliveries per month",
         field: 'monthly_delivery_limit',
-        used: UserUsagePeriod.used_deliveries(user: account),
+        used: UserUsagePeriod.used_deliveries(user: account, at: now),
         limit: limit,
-        period_ends: UserUsagePeriod.period_ends_at
+        period_ends: UserUsagePeriod.period_ends_at(now)
       )
     end
 
