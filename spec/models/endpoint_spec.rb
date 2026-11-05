@@ -408,6 +408,114 @@ describe Endpoint, type: :model do
     end
   end
 
+  describe '#paused?' do
+    context 'when active is false' do
+      it 'is true' do
+        expect(build(:endpoint, active: false)).to be_paused
+      end
+    end
+
+    context 'when active is true' do
+      it 'is false' do
+        expect(build(:endpoint, active: true)).not_to be_paused
+      end
+    end
+  end
+
+  describe '#deliverable?' do
+    context 'when the endpoint is active, not archived, and enabled' do
+      it 'is true' do
+        expect(build(:endpoint, active: true, archived_at: nil, circuit_state: :enabled)).to be_deliverable
+      end
+    end
+
+    context 'when the endpoint is paused' do
+      it 'is false' do
+        expect(build(:endpoint, active: false, archived_at: nil, circuit_state: :enabled)).not_to be_deliverable
+      end
+    end
+
+    context 'when the endpoint is archived' do
+      it 'is false' do
+        expect(build(:endpoint, active: true, archived_at: Time.current, circuit_state: :enabled)).not_to be_deliverable
+      end
+    end
+
+    context 'when the endpoint circuit is open' do
+      it 'is false' do
+        expect(build(:endpoint, active: true, archived_at: nil, circuit_state: :circuit_open)).not_to be_deliverable
+      end
+    end
+
+    context 'when the endpoint circuit is disabled' do
+      it 'is false' do
+        expect(build(:endpoint, active: true, archived_at: nil, circuit_state: :disabled)).not_to be_deliverable
+      end
+    end
+  end
+
+  describe '#replayable?' do
+    context 'when the endpoint is active and not archived or disabled' do
+      it 'is true' do
+        expect(build(:endpoint, active: true, archived_at: nil, circuit_state: :enabled)).to be_replayable
+        expect(build(:endpoint, active: true, archived_at: nil, circuit_state: :circuit_open)).to be_replayable
+      end
+    end
+
+    context 'when the endpoint is paused' do
+      it 'is false' do
+        expect(build(:endpoint, active: false)).not_to be_replayable
+      end
+    end
+
+    context 'when the endpoint is archived' do
+      it 'is false' do
+        expect(build(:endpoint, archived_at: Time.current)).not_to be_replayable
+      end
+    end
+
+    context 'when the endpoint circuit is disabled' do
+      it 'is false' do
+        expect(build(:endpoint, circuit_state: :disabled)).not_to be_replayable
+      end
+    end
+  end
+
+  describe 'scopes' do
+    let(:project) { create(:project) }
+    let!(:active_endpoint) { create(:endpoint, project: project, active: true) }
+    let!(:paused_endpoint) { create(:endpoint, project: project, active: false) }
+    let!(:archived_endpoint) { create(:endpoint, project: project, archived_at: Time.current) }
+    let!(:circuit_open_endpoint) { create(:endpoint, project: project, circuit_state: :circuit_open) }
+    let!(:disabled_endpoint) { create(:endpoint, project: project, circuit_state: :disabled) }
+
+    describe '.active' do
+      it 'includes only active endpoints' do
+        expect(described_class.active).to include(active_endpoint, circuit_open_endpoint, disabled_endpoint)
+        expect(described_class.active).not_to include(paused_endpoint)
+      end
+    end
+
+    describe '.paused' do
+      it 'includes only paused endpoints' do
+        expect(described_class.paused).to contain_exactly(paused_endpoint)
+      end
+    end
+
+    describe '.deliverable' do
+      it 'includes only active, unarchived, and circuit-enabled endpoints' do
+        expect(described_class.deliverable).to contain_exactly(active_endpoint)
+        expect(described_class.deliverable).not_to include(archived_endpoint)
+      end
+    end
+
+    describe '.replayable' do
+      it 'includes active and unarchived endpoints unless disabled' do
+        expect(described_class.replayable).to contain_exactly(active_endpoint, circuit_open_endpoint)
+      end
+    end
+  end
+
   describe '#circuit_hold_reason' do
     it 'is nil while the endpoint delivers normally' do
       expect(build(:endpoint)).to have_attributes(circuit_hold_reason: nil)

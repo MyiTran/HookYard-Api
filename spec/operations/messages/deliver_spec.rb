@@ -652,4 +652,107 @@ describe Messages::Deliver, type: :operation do
       end
     end
   end
+
+  describe 'delivery while the endpoint is paused' do
+    before { endpoint.update!(active: false) }
+
+    it 'skips delivery without consuming an attempt or modifying message status' do
+      allow(http_client).to receive(:post)
+
+      operation.call(message: message)
+
+      expect(http_client).not_to have_received(:post)
+      expect(message.reload.status).to eq('pending')
+      expect(message.attempt_count).to eq(0)
+      expect(message.delivery_attempts).to be_empty
+      expect(message).not_to be_held
+      expect(endpoint.reload).to be_enabled
+    end
+
+    context 'when the message was scheduled for retry' do
+      before do
+        message.update_columns(attempt_count: 2, next_retry_at: 1.minute.ago)
+      end
+
+      it 'preserves retry timing and does not consume another attempt' do
+        allow(http_client).to receive(:post)
+
+        operation.call(message: message)
+
+        expect(http_client).not_to have_received(:post)
+        expect(message.reload.attempt_count).to eq(2)
+        expect(message.status).to eq('pending')
+        expect(message.next_retry_at).to be_within(1.second).of(1.minute.ago)
+        expect(message.delivery_attempts).to be_empty
+        expect(message).not_to be_held
+      end
+
+      it 'allows the due-retry recovery sweep to deliver the message after resume' do
+        create(:delivery_attempt, message: message, attempt_number: 1, response_status: 500)
+        create(:delivery_attempt, message: message, attempt_number: 2, response_status: 503)
+        allow(http_client).to receive(:post).and_return(http_result(status: 200))
+
+        operation.call(message: message)
+        expect(http_client).not_to have_received(:post)
+        expect(message.reload.attempt_count).to eq(2)
+        expect(message.status).to eq('pending')
+
+        endpoint.update!(active: true)
+
+        expect(Message.due_for_delivery).to include(message)
+        Messages::EnqueueDueRetries.call
+        enqueued_job = ActiveJob::Base.queue_adapter.enqueued_jobs.last
+        expect(enqueued_job[:job]).to eq(Messages::DeliverJob)
+        expect(enqueued_job[:args]).to eq([message.id])
+
+        operation.call(message: message.reload)
+        expect(http_client).to have_received(:post)
+        expect(message.reload.status).to eq('succeeded')
+        expect(message.attempt_count).to eq(3)
+      end
+    end
+
+    context 'when the endpoint is resumed' do
+      it 'delivers normally' do
+        endpoint.update!(active: true)
+        allow(http_client).to receive(:post).and_return(http_result(status: 200))
+
+        operation.call(message: message)
+
+        expect(http_client).to have_received(:post)
+        expect(message.reload.status).to eq('succeeded')
+      end
+    end
+
+    context 'when the paused endpoint also has a non-deliverable circuit state' do
+      it 'keeps the pause as the reason and never holds the message for the circuit' do
+        endpoint.update!(active: false, circuit_state: :disabled)
+        allow(http_client).to receive(:post)
+
+        operation.call(message: message)
+
+        expect(http_client).not_to have_received(:post)
+        expect(message.reload).not_to be_held
+        expect(message.status).to eq('pending')
+        expect(message.attempt_count).to eq(0)
+        expect(message.delivery_attempts).to be_empty
+      end
+    end
+  end
+
+  describe 'delivery while the endpoint is archived' do
+    before { endpoint.update!(archived_at: Time.current) }
+
+    it 'skips delivery without consuming an attempt or modifying message status' do
+      allow(http_client).to receive(:post)
+
+      operation.call(message: message)
+
+      expect(http_client).not_to have_received(:post)
+      expect(message.reload.status).to eq('pending')
+      expect(message.attempt_count).to eq(0)
+      expect(message.delivery_attempts).to be_empty
+      expect(message).not_to be_held
+    end
+  end
 end

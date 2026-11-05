@@ -283,6 +283,63 @@ describe Message, type: :model do
     end
   end
 
+  describe '#mark_succeeded_by_replay!' do
+    context 'when the message terminally failed' do
+      it 'stores the succeeded terminal state with the replay completion time' do
+        completed_at = Time.zone.local(2026, 1, 2, 9, 0, 0)
+        message.update_columns(status: 'failed', attempt_count: 8, terminal_at: 1.day.ago,
+                               delivery_lease_expires_at: 1.minute.from_now, next_retry_at: 1.minute.from_now)
+
+        message.mark_succeeded_by_replay!(at: completed_at)
+
+        message.reload
+        expect(message.status).to eq('succeeded')
+        expect(message.terminal_at).to eq(completed_at)
+        expect(message.next_retry_at).to be_nil
+        expect(message.delivery_lease_expires_at).to be_nil
+      end
+
+      it 'keeps the automatic retry usage untouched' do
+        message.update_columns(status: 'failed', attempt_count: 8)
+
+        message.mark_succeeded_by_replay!
+
+        expect(message.reload.attempt_count).to eq(8)
+      end
+
+      it 'does not decrement the endpoint queue count a second time' do
+        endpoint.update!(queued_message_count: 2)
+        message.update_columns(status: 'failed')
+
+        message.mark_succeeded_by_replay!
+
+        expect(endpoint.reload.queued_message_count).to eq(2)
+      end
+
+      it 'releases a stale queue slot exactly once' do
+        endpoint.update!(queued_message_count: 2)
+        message.update_columns(status: 'failed', queued_at: Time.current)
+
+        message.mark_succeeded_by_replay!
+
+        expect(endpoint.reload.queued_message_count).to eq(1)
+        expect(message.reload.queued_at).to be_nil
+      end
+    end
+
+    context 'when the message is not failed' do
+      it 'leaves a pending message untouched' do
+        expect { message.mark_succeeded_by_replay! }.not_to change { message.reload.status }
+      end
+
+      it 'leaves an already succeeded message untouched' do
+        message.update_columns(status: 'succeeded', terminal_at: 1.day.ago)
+
+        expect { message.mark_succeeded_by_replay! }.not_to change { message.reload.terminal_at }
+      end
+    end
+  end
+
   describe 'concurrent terminal transitions' do
     self.use_transactional_tests = false
 

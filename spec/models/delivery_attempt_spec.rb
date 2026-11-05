@@ -30,6 +30,30 @@ describe DeliveryAttempt, type: :model do
     end
   end
 
+  describe 'evidence classification' do
+    it 'leaves an automatic delivery attempt without replay evidence' do
+      expect(attempt).not_to be_replay
+      expect(attempt.replay_item_id).to be_nil
+    end
+
+    it 'attaches the replay item to a replay delivery attempt' do
+      item = create(:replay_item)
+      replay_attempt = create(:delivery_attempt, message: item.message, replay_item_id: item.id)
+
+      expect(replay_attempt).to be_replay
+      expect(replay_attempt.replay_item_id).to eq(item.id)
+    end
+
+    it 'refuses to detach the replay item after the evidence was recorded' do
+      item = create(:replay_item)
+      replay_attempt = create(:delivery_attempt, message: item.message, replay_item_id: item.id)
+      replay_attempt.replay_item_id = nil
+
+      expect(replay_attempt).not_to be_valid
+      expect(replay_attempt.errors[:base]).to be_present
+    end
+  end
+
   describe '#status' do
     it 'reports in progress until the attempt completes' do
       expect(attempt.status).to eq('in_progress')
