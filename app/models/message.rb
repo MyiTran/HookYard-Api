@@ -2,20 +2,27 @@
 #
 # Table name: messages
 #
-#  id          :uuid             not null, primary key
-#  status      :string           default("pending"), not null
-#  created_at  :datetime         not null
-#  updated_at  :datetime         not null
-#  endpoint_id :uuid             not null
-#  event_id    :uuid             not null
+#  id                        :uuid             not null, primary key
+#  attempt_count             :integer          default(0), not null
+#  delivery_lease_expires_at :datetime
+#  next_retry_at             :datetime
+#  status                    :string           default("pending"), not null
+#  terminal_at               :datetime
+#  created_at                :datetime         not null
+#  updated_at                :datetime         not null
+#  endpoint_id               :uuid             not null
+#  event_id                  :uuid             not null
 #
 # Indexes
 #
+#  index_messages_on_active_delivery_lease       (delivery_lease_expires_at) WHERE ((status)::text = 'delivering'::text)
 #  index_messages_on_endpoint_id                 (endpoint_id)
 #  index_messages_on_endpoint_id_and_created_at  (endpoint_id,created_at)
+#  index_messages_on_endpoint_status_and_lease   (endpoint_id,status,delivery_lease_expires_at)
 #  index_messages_on_event_id                    (event_id)
 #  index_messages_on_event_id_and_endpoint_id    (event_id,endpoint_id) UNIQUE
 #  index_messages_on_pending_updated_at          (updated_at) WHERE ((status)::text = 'pending'::text)
+#  index_messages_on_status_and_next_retry_at    (status,next_retry_at)
 #
 # Foreign Keys
 #
@@ -23,9 +30,10 @@
 #  fk_rails_...  (event_id => events.id) ON DELETE => cascade
 #
 class Message < ApplicationRecord
+  include DeliveryLifecycle
+
   PENDING_STATUS = 'pending'
 
-  attribute :attempt_count, :integer
   attribute :last_attempt_at, :datetime
   attribute :last_response_status, :integer
   attribute :last_duration_ms, :integer
@@ -37,8 +45,6 @@ class Message < ApplicationRecord
   belongs_to :event
   belongs_to :endpoint
   has_many :delivery_attempts, -> { order(:attempt_number) }, dependent: :destroy
-
-  scope :pending_before, ->(at) { pending.where(updated_at: ...at) }
 
   validate :event_and_endpoint_share_project
 

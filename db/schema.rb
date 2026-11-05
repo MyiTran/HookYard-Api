@@ -138,12 +138,20 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_26_100000) do
     t.string "status", default: "pending", null: false
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.integer "attempt_count", default: 0, null: false
+    t.datetime "next_retry_at"
+    t.datetime "delivery_lease_expires_at"
+    t.datetime "terminal_at"
+    t.index ["delivery_lease_expires_at"], name: "index_messages_on_active_delivery_lease", where: "((status)::text = 'delivering'::text)"
     t.index ["endpoint_id", "created_at"], name: "index_messages_on_endpoint_id_and_created_at"
+    t.index ["endpoint_id", "status", "delivery_lease_expires_at"], name: "index_messages_on_endpoint_status_and_lease"
     t.index ["endpoint_id"], name: "index_messages_on_endpoint_id"
     t.index ["event_id", "endpoint_id"], name: "index_messages_on_event_id_and_endpoint_id", unique: true
     t.index ["event_id"], name: "index_messages_on_event_id"
+    t.index ["status", "next_retry_at"], name: "index_messages_on_status_and_next_retry_at"
     t.index ["updated_at"], name: "index_messages_on_pending_updated_at", where: "((status)::text = 'pending'::text)"
     t.check_constraint "status::text = ANY (ARRAY['pending'::character varying::text, 'delivering'::character varying::text, 'succeeded'::character varying::text, 'failed'::character varying::text])", name: "messages_status_valid"
+    t.check_constraint "attempt_count >= 0", name: "messages_attempt_count_non_negative"
   end
 
   create_table "notifications", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|

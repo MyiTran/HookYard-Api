@@ -78,6 +78,7 @@ describe 'Projects::Messages', type: :request do
       message = create(:message, event: event, endpoint: endpoint)
       create(:delivery_attempt, message: message, attempt_number: 1, response_status: 500, duration_ms: 30)
       latest = create(:delivery_attempt, message: message, attempt_number: 2, response_status: 200, duration_ms: 12)
+      message.update_columns(attempt_count: 2)
 
       get endpoint_messages_path(project.id, endpoint.id), headers: auth_headers(maintainer)
 
@@ -161,6 +162,7 @@ describe 'Projects::Messages', type: :request do
     it 'returns the message with its event, endpoint and ordered attempts' do
       create(:delivery_attempt, message: message, attempt_number: 2, response_status: 200, duration_ms: 12)
       create(:delivery_attempt, message: message, attempt_number: 1, response_status: 503, duration_ms: 30)
+      message.update_columns(attempt_count: 2)
 
       get message_path(project.id, message.id), headers: auth_headers(maintainer)
 

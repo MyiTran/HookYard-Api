@@ -88,8 +88,9 @@ describe 'Messages', type: :request do
       )
     end
 
-    it 'returns attempt aggregates and the latest attempt fields' do
+    it 'returns the persisted attempt count and the latest attempt fields' do
       message = create(:message, event: event, endpoint: endpoint)
+      message.update_columns(attempt_count: 2)
       create(:delivery_attempt, message: message, attempt_number: 1, response_status: 500, duration_ms: 30)
       latest = create(:delivery_attempt, message: message, attempt_number: 2, response_status: 200, duration_ms: 12)
 
@@ -114,6 +115,23 @@ describe 'Messages', type: :request do
       expect(entry['last_response_status']).to be_nil
       expect(entry['last_duration_ms']).to be_nil
       expect(entry['last_error_type']).to be_nil
+    end
+
+    it 'serializes the retry lifecycle contract' do
+      message = create(:message, event: event, endpoint: endpoint)
+      message.update_columns(attempt_count: 2, next_retry_at: 5.minutes.from_now)
+
+      get '/api/v1/messages', headers: auth_headers(user)
+
+      entry = JSON.parse(response.body)['data'].first
+      expect(entry).to include(
+        'attempt_count' => 2,
+        'max_attempts' => 8,
+        'retryable' => true
+      )
+      expect(entry['next_retry_at']).to be_present
+      expect(entry['terminal_at']).to be_nil
+      expect(entry.keys).not_to include('delivery_lease_expires_at')
     end
 
     describe 'filters' do
@@ -227,6 +245,66 @@ describe 'Messages', type: :request do
 
         expect(response).to have_http_status(:unauthorized)
       end
+    end
+  end
+
+  describe 'GET /api/v1/projects/:project_id/messages/:id' do
+    context 'when the message belongs to the project' do
+      it 'returns the delivery lifecycle fields and attempts' do
+        message = create(:message, event: event, endpoint: endpoint)
+        create(:delivery_attempt, message: message, attempt_number: 1, response_status: 500)
+        message.update_columns(attempt_count: 1)
+
+        get "/api/v1/projects/#{project.id}/messages/#{message.id}", headers: auth_headers(user)
+
+        expect(response).to have_http_status(:ok)
+        expect(json_response['id']).to eq(message.id)
+        expect(json_response).to include(
+          'attempt_count' => 1,
+          'max_attempts' => 8,
+          'status' => 'pending',
+          'retryable' => true
+        )
+        expect(json_response['attempts'].first['status']).to eq('failed')
+        expect(json_response.keys).not_to include('delivery_lease_expires_at')
+      end
+
+      it 'exposes the terminal timestamp for a delivered message' do
+        message = create(:message, event: event, endpoint: endpoint)
+        message.update_columns(status: 'succeeded', attempt_count: 1, terminal_at: Time.current)
+
+        get "/api/v1/projects/#{project.id}/messages/#{message.id}", headers: auth_headers(user)
+
+        expect(json_response['status']).to eq('succeeded')
+        expect(json_response['terminal_at']).to be_present
+        expect(json_response['retryable']).to be(false)
+      end
+    end
+
+    context 'when the message belongs to another project' do
+      it 'is not found' do
+        other_message = create(:message)
+
+        get "/api/v1/projects/#{project.id}/messages/#{other_message.id}", headers: auth_headers(user)
+
+        expect(response).to have_http_status(:not_found)
+      end
+    end
+  end
+
+  describe 'GET /api/v1/projects/:project_id/endpoints/:endpoint_id/messages' do
+    it 'lists the endpoint messages with the retry lifecycle fields' do
+      message = create(:message, event: event, endpoint: endpoint)
+      message.update_columns(attempt_count: 1, next_retry_at: 1.minute.from_now)
+
+      get "/api/v1/projects/#{project.id}/endpoints/#{endpoint.id}/messages", headers: auth_headers(user)
+
+      expect(response).to have_http_status(:ok)
+      expect(json_response['data'].map { |entry| entry['id'] }).to contain_exactly(message.id)
+      expect(json_response['data'].first).to include(
+        'attempt_count' => 1,
+        'max_attempts' => 8
+      )
     end
   end
 end
