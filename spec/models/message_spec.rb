@@ -5,6 +5,7 @@ describe Message, type: :model do
   let(:endpoint) { create(:endpoint, project: project) }
   let(:event) { create(:event, project: project) }
   let(:message) { create(:message, event: event, endpoint: endpoint) }
+  let(:hold_reason) { 'endpoint_disabled' }
 
   def new_message(**attributes)
     create(:message, project: project, endpoint: endpoint, **attributes)
@@ -195,6 +196,55 @@ describe Message, type: :model do
       expect(message.next_retry_at).to be_nil
       expect(message.delivery_lease_expires_at).to be_nil
     end
+
+    context 'when the message owned a circuit queue slot' do
+      it 'clears the slot and decrements the endpoint queue counter' do
+        message.update_columns(queued_at: Time.current, status: 'delivering')
+        endpoint.update_columns(queued_message_count: 1)
+
+        message.mark_failed!
+
+        expect(message.reload.queued_at).to be_nil
+        expect(message).not_to be_queue_counted
+        expect(endpoint.reload.queued_message_count).to eq(0)
+      end
+
+      it 'decrements the endpoint queue count exactly once' do
+        endpoint.update!(queued_message_count: 2)
+        message.update_columns(queued_at: Time.current)
+
+        message.mark_failed!
+        message.mark_failed!
+
+        expect(endpoint.reload.queued_message_count).to eq(1)
+      end
+    end
+
+    context 'when the message was held' do
+      it 'clears the hold tracking of a message that finally fails' do
+        message.hold!(reason: 'endpoint_disabled')
+        message.mark_delivering!(lease_expires_at: 1.minute.from_now,
+                                 attempt_count: Webhooks::DeliveryPolicy::MAX_ATTEMPTS)
+
+        message.mark_failed!
+
+        message.reload
+        expect(message).to be_failed
+        expect(message.held_at).to be_nil
+        expect(message.hold_reason).to be_nil
+        expect(message.delivery_state).to eq(Message::DELIVERY_STATE_TERMINAL)
+      end
+    end
+
+    context 'when circuit hold fields are written to a failed message' do
+      it 'is rejected by the database' do
+        message.mark_failed!
+
+        expect do
+          message.update_columns(held_at: Time.current, hold_reason: 'endpoint_disabled')
+        end.to raise_error(ActiveRecord::StatementInvalid)
+      end
+    end
   end
 
   describe '#mark_succeeded!' do
@@ -221,6 +271,99 @@ describe Message, type: :model do
       expect(message.next_retry_at).to eq(retry_at)
       expect(message.delivery_lease_expires_at).to be_nil
       expect(message.terminal_at).to be_nil
+    end
+  end
+
+  describe '#hold!' do
+    it 'parks the message as held and clears the retry schedule' do
+      message.update_columns(next_retry_at: 1.minute.from_now, delivery_lease_expires_at: 1.minute.from_now)
+      held_at = Time.current
+
+      message.hold!(reason: hold_reason, at: held_at)
+
+      expect(message.reload).to be_held
+      expect(message.held_at).to eq(held_at)
+      expect(message.hold_reason).to eq(hold_reason)
+      expect(message.next_retry_at).to be_nil
+      expect(message.delivery_lease_expires_at).to be_nil
+      expect(message.delivery_state).to eq(Message::DELIVERY_STATE_HELD)
+    end
+  end
+
+  describe '#release_hold!' do
+    context 'when the message is held' do
+      it 'restores it as a plain pending message' do
+        message.hold!(reason: hold_reason)
+
+        message.release_hold!
+
+        expect(message.reload).not_to be_held
+        expect(message.hold_reason).to be_nil
+      end
+    end
+  end
+
+  describe '#delivery_state' do
+    it 'describes every observable delivery state' do
+      expect(build(:message, status: :pending).delivery_state).to eq(Message::DELIVERY_STATE_QUEUED)
+      expect(build(:message, status: :pending, next_retry_at: 1.minute.from_now).delivery_state)
+        .to eq(Message::DELIVERY_STATE_SCHEDULED_RETRY)
+      expect(build(:message, status: :pending, held_at: Time.current).delivery_state)
+        .to eq(Message::DELIVERY_STATE_HELD)
+      expect(build(:message, status: :delivering).delivery_state).to eq(Message::DELIVERY_STATE_DELIVERING)
+      expect(build(:message, status: :succeeded).delivery_state).to eq(Message::DELIVERY_STATE_TERMINAL)
+      expect(build(:message, status: :failed).delivery_state).to eq(Message::DELIVERY_STATE_TERMINAL)
+    end
+  end
+
+  describe '#hold_summary' do
+    it 'is nil while the message is not held' do
+      expect(build(:message).hold_summary).to be_nil
+    end
+
+    it 'describes the hold reason and start time' do
+      held_at = Time.zone.local(2026, 1, 1, 12, 0, 0)
+      message = build(:message, held_at: held_at, hold_reason: 'endpoint_circuit_open')
+
+      expect(message.hold_summary).to eq(reason: 'endpoint_circuit_open', since: held_at, release_at: nil)
+    end
+  end
+
+  describe '.delivery_state_scope' do
+    it 'returns the circuit held scope and nothing for unknown states' do
+      held = new_message
+      held.update_columns(held_at: Time.current, hold_reason: hold_reason)
+
+      expect(described_class.delivery_state_scope('held_by_circuit')).to contain_exactly(held)
+      expect(described_class.delivery_state_scope('unknown')).to be_nil
+    end
+  end
+
+  describe 'concurrent terminal transitions' do
+    self.use_transactional_tests = false
+
+    after { project.destroy! }
+
+    it 'releases the queue slot of a message exactly once' do
+      target = create(:message, project: project, endpoint: endpoint)
+      target.update_columns(queued_at: Time.current)
+      endpoint.update_columns(queued_message_count: 1)
+      start = Queue.new
+
+      threads = Array.new(4) do
+        Thread.new do
+          start.pop
+          ActiveRecord::Base.connection_pool.with_connection do
+            described_class.find(target.id).mark_succeeded!
+          end
+        end
+      end
+
+      4.times { start.push(true) }
+      threads.each(&:join)
+
+      expect(endpoint.reload.queued_message_count).to eq(0)
+      expect(target.reload.status).to eq('succeeded')
     end
   end
 end

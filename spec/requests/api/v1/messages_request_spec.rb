@@ -209,6 +209,135 @@ describe 'Messages', type: :request do
       end
     end
 
+    context 'when filtering by delivery state' do
+      let!(:circuit_open_message) do
+        create_message(project: project, endpoint: endpoint).tap { |record| record.hold!(reason: 'endpoint_circuit_open') }
+      end
+      let!(:disabled_endpoint_message) do
+        create_message(project: project, endpoint: endpoint).tap { |record| record.hold!(reason: 'endpoint_disabled') }
+      end
+
+      def held_ids
+        json_response['data'].map { |entry| entry['id'] }
+      end
+
+      it 'returns messages held by an open circuit and by a disabled endpoint' do
+        get '/api/v1/messages', params: { delivery_state: 'held_by_circuit' }, headers: auth_headers(user)
+
+        expect(response).to have_http_status(:ok)
+        expect(held_ids).to contain_exactly(circuit_open_message.id, disabled_endpoint_message.id)
+        expect(json_response['data'].map { |entry| entry['delivery_state'] }).to all(eq('held_by_circuit'))
+      end
+
+      it 'excludes queued, retry-scheduled, delivering and terminal messages' do
+        queued = create_message(project: project, endpoint: endpoint)
+        retry_scheduled = create_message(project: project, endpoint: endpoint)
+        retry_scheduled.update_columns(next_retry_at: 1.minute.from_now)
+        delivering = create_message(project: project, endpoint: endpoint)
+        delivering.update_columns(status: 'delivering', delivery_lease_expires_at: 1.minute.from_now)
+        terminal = create_message(project: project, endpoint: endpoint, status: :failed)
+
+        get '/api/v1/messages', params: { delivery_state: 'held_by_circuit' }, headers: auth_headers(user)
+
+        expect(held_ids).not_to include(queued.id, retry_scheduled.id, delivering.id, terminal.id)
+      end
+
+      it 'excludes pending messages of a paused endpoint that are not held' do
+        paused_endpoint = create(:endpoint, project: project, active: false)
+        paused_message = create(:message, event: create(:event, project: project), endpoint: paused_endpoint)
+
+        get '/api/v1/messages', params: { delivery_state: 'held_by_circuit' }, headers: auth_headers(user)
+
+        expect(held_ids).not_to include(paused_message.id)
+      end
+
+      it 'narrows held messages with the project and endpoint filters' do
+        other_endpoint = create(:endpoint, project: project)
+        other_endpoint_message = create(:message, event: create(:event, project: project), endpoint: other_endpoint)
+        other_endpoint_message.hold!(reason: 'endpoint_circuit_open')
+        other_project = create(:project, :with_owner, owner: user)
+        create(:message, project: other_project).hold!(reason: 'endpoint_circuit_open')
+
+        get '/api/v1/messages',
+            params: { delivery_state: 'held_by_circuit', project_id: project.id },
+            headers: auth_headers(user)
+
+        expect(held_ids).to contain_exactly(
+          circuit_open_message.id, disabled_endpoint_message.id, other_endpoint_message.id
+        )
+
+        get '/api/v1/messages',
+            params: { delivery_state: 'held_by_circuit', endpoint_id: other_endpoint.id },
+            headers: auth_headers(user)
+
+        expect(held_ids).to contain_exactly(other_endpoint_message.id)
+      end
+
+      it 'does not expose held messages of projects the user cannot access' do
+        outsider_project = create(:project, :with_owner, owner: create(:user))
+        outsider_message = create(:message, project: outsider_project)
+        outsider_message.hold!(reason: 'endpoint_circuit_open')
+
+        get '/api/v1/messages', params: { delivery_state: 'held_by_circuit' }, headers: auth_headers(user)
+
+        expect(held_ids).to contain_exactly(circuit_open_message.id, disabled_endpoint_message.id)
+        expect(held_ids).not_to include(outsider_message.id)
+      end
+
+      it 'paginates the filtered held messages' do
+        create_message(project: project, endpoint: endpoint).tap { |record| record.hold!(reason: 'endpoint_disabled') }
+
+        get '/api/v1/messages',
+            params: { delivery_state: 'held_by_circuit', page: { number: 1, size: 2 } },
+            headers: auth_headers(user)
+
+        expect(json_response['data'].size).to eq(2)
+        expect(json_response['meta']).to include(
+          'page_number' => 1,
+          'page_size' => 2,
+          'total_count' => 3,
+          'last_page' => 2
+        )
+      end
+
+      it 'rejects an unsupported delivery state' do
+        get '/api/v1/messages', params: { delivery_state: 'closed' }, headers: auth_headers(user)
+
+        expect(response).to have_http_status(:unprocessable_entity)
+        expect(json_response).to include(
+          'message' => 'Unsupported delivery state',
+          'status' => 422,
+          'errors' => [{ 'field' => 'delivery_state', 'message' => 'is not supported' }]
+        )
+      end
+    end
+
+    context 'when the delivery state is not requested' do
+      it 'keeps returning every accessible message' do
+        held = create_message(project: project, endpoint: endpoint)
+        held.hold!(reason: 'endpoint_circuit_open')
+        queued = create_message(project: project, endpoint: endpoint)
+
+        get '/api/v1/messages', headers: auth_headers(user)
+
+        expect(json_response['data'].map { |entry| entry['id'] }).to contain_exactly(held.id, queued.id)
+        expect(json_response['meta']['total_count']).to eq(2)
+      end
+
+      it 'keeps the status filter independent from the hold tracking' do
+        held = create_message(project: project, endpoint: endpoint)
+        held.hold!(reason: 'endpoint_disabled')
+        queued = create_message(project: project, endpoint: endpoint)
+        create_message(project: project, endpoint: endpoint, status: :succeeded)
+
+        get '/api/v1/messages', params: { status: 'pending' }, headers: auth_headers(user)
+
+        expect(json_response['data'].map { |entry| entry['id'] }).to contain_exactly(held.id, queued.id)
+        expect(json_response['data'].map { |entry| entry['delivery_state'] })
+          .to contain_exactly('held_by_circuit', 'queued')
+      end
+    end
+
     it 'never exposes secrets, signature headers or attempt evidence' do
       message = create(:message, event: event, endpoint: endpoint)
       create(:delivery_attempt, message: message, attempt_number: 1, response_status: 200,
@@ -263,10 +392,49 @@ describe 'Messages', type: :request do
           'attempt_count' => 1,
           'max_attempts' => 8,
           'status' => 'pending',
-          'retryable' => true
+          'retryable' => true,
+          'delivery_state' => 'queued'
         )
         expect(json_response['attempts'].first['status']).to eq('failed')
+        expect(json_response['attempts'].first['failure_category']).to eq('http_error')
+        expect(json_response['failure_category']).to eq('http_error')
         expect(json_response.keys).not_to include('delivery_lease_expires_at')
+      end
+
+      it 'distinguishes a rejected destination from a transport failure' do
+        message = create(:message, event: event, endpoint: endpoint)
+        create(
+          :delivery_attempt,
+          message: message,
+          attempt_number: 1,
+          error_type: 'Webhooks::DestinationResolver::NotPubliclyRoutable',
+          error_message: 'destination is not publicly routable'
+        )
+        create(
+          :delivery_attempt,
+          message: message,
+          attempt_number: 2,
+          error_type: 'Net::ReadTimeout',
+          error_message: 'execution expired'
+        )
+
+        get "/api/v1/projects/#{project.id}/messages/#{message.id}", headers: auth_headers(user)
+
+        expect(response).to have_http_status(:ok)
+        expect(json_response['failure_category']).to eq('timeout')
+        expect(json_response['attempts'].map { |attempt| attempt['failure_category'] })
+          .to eq(%w[destination_rejected timeout])
+        expect(response.body).not_to match(/\b\d{1,3}(\.\d{1,3}){3}\b/)
+      end
+
+      it 'exposes the held delivery state of a circuit-held message' do
+        message = create(:message, event: event, endpoint: endpoint)
+        message.update_columns(held_at: Time.current, hold_reason: 'endpoint_disabled')
+
+        get "/api/v1/projects/#{project.id}/messages/#{message.id}", headers: auth_headers(user)
+
+        expect(json_response['delivery_state']).to eq('held_by_circuit')
+        expect(json_response['hold']).to include('reason' => 'endpoint_disabled')
       end
 
       it 'exposes the terminal timestamp for a delivered message' do
