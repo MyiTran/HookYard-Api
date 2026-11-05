@@ -20,6 +20,7 @@
 #  created_at             :datetime         not null
 #  updated_at             :datetime         not null
 #  message_id             :uuid             not null
+#  replay_item_id         :uuid
 #  request_id             :string           not null
 #  webhook_id             :string           not null
 #
@@ -29,11 +30,13 @@
 #  index_delivery_attempts_on_message_id                     (message_id)
 #  index_delivery_attempts_on_message_id_and_attempt_number  (message_id,attempt_number) UNIQUE
 #  index_delivery_attempts_on_message_id_and_created_at      (message_id,created_at)
+#  index_delivery_attempts_on_replay_item_id                 (replay_item_id) UNIQUE
 #  index_delivery_attempts_on_request_id                     (request_id)
 #
 # Foreign Keys
 #
 #  fk_rails_...  (message_id => messages.id) ON DELETE => cascade
+#  fk_rails_...  (replay_item_id => replay_items.id) ON DELETE => nullify
 #
 class DeliveryAttempt < ApplicationRecord
   RESPONSE_BODY_MAX_BYTES = Webhooks::ResponseEvidence::RESPONSE_BODY_MAX_BYTES
@@ -43,7 +46,7 @@ class DeliveryAttempt < ApplicationRecord
   SENSITIVE_HEADERS = Webhooks::ResponseEvidence::SENSITIVE_HEADERS
   EVIDENCE_FIELDS = %i[
     message_id attempt_number request_id webhook_id signing_secret_version signed_at
-    request_url http_method request_headers request_body
+    request_url http_method request_headers request_body replay_item_id
   ].freeze
 
   class << self
@@ -52,6 +55,7 @@ class DeliveryAttempt < ApplicationRecord
   end
 
   belongs_to :message
+  belongs_to :replay_item, optional: true
 
   validates :attempt_number, presence: true, numericality: { only_integer: true, greater_than: 0 }
   validates :attempt_number, uniqueness: { scope: :message_id }
@@ -71,6 +75,10 @@ class DeliveryAttempt < ApplicationRecord
 
   def completed?
     response_status.present? || error_type.present?
+  end
+
+  def replay?
+    replay_item_id.present?
   end
 
   def bodies_purged?

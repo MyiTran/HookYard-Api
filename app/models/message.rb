@@ -58,6 +58,11 @@ class Message < ApplicationRecord
   belongs_to :event
   belongs_to :endpoint
   has_many :delivery_attempts, -> { order(:attempt_number) }, dependent: :destroy
+  has_many :replay_items, dependent: :destroy
+  has_one :active_replay_item,
+          -> { where(status: ReplayItem::ACTIVE_STATUSES).order(created_at: :desc) },
+          class_name: 'ReplayItem', inverse_of: :message
+  has_one :latest_replay_item, -> { order(created_at: :desc) }, class_name: 'ReplayItem', inverse_of: :message
 
   scope :held, -> { where.not(held_at: nil) }
   scope :not_held, -> { where(held_at: nil) }
@@ -172,6 +177,20 @@ class Message < ApplicationRecord
 
   def mark_failed!(at: Time.current)
     finish!(status: :failed, at: at)
+  end
+
+  def mark_succeeded_by_replay!(at: Time.current)
+    return unless failed?
+
+    update!(
+      status: :succeeded,
+      next_retry_at: nil,
+      delivery_lease_expires_at: nil,
+      terminal_at: at,
+      held_at: nil,
+      hold_reason: nil
+    )
+    release_queue_slot!
   end
 
   private

@@ -22,6 +22,10 @@ class MessageSerializer < ApplicationSerializer
 
   fields :last_attempt_at, :last_response_status, :last_duration_ms, :last_error_type, :failure_category
 
+  field :replay do |message|
+    Replays::Eligibility.summary_for(message)
+  end
+
   view :with_context do
     field :project do |message|
       { id: message.endpoint.project.id, name: message.endpoint.project.name }

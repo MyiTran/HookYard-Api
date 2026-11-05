@@ -43,10 +43,15 @@ class Endpoint < ApplicationRecord
   belongs_to :project
   has_many :endpoint_signing_secrets, dependent: :destroy
   has_many :messages, dependent: :destroy
+  has_many :replay_items, dependent: :destroy
   has_many :circuit_probes, dependent: :destroy
 
   scope :archived, -> { where.not(archived_at: nil) }
   scope :not_archived, -> { where(archived_at: nil) }
+  scope :active, -> { where(active: true) }
+  scope :paused, -> { where(active: false) }
+  scope :deliverable, -> { active.not_archived.enabled }
+  scope :replayable, -> { active.not_archived.where.not(circuit_state: circuit_states[:disabled]) }
   scope :probe_due, lambda { |at = Time.current|
     circuit_open
       .where(circuit_next_probe_at: ..at)
@@ -60,6 +65,18 @@ class Endpoint < ApplicationRecord
 
   def archived?
     archived_at.present?
+  end
+
+  def paused?
+    !active?
+  end
+
+  def deliverable?
+    active? && !archived? && enabled?
+  end
+
+  def replayable?
+    active? && !archived? && !disabled?
   end
 
   def subscribed_to?(event_type)

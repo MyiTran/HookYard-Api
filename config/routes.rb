@@ -38,7 +38,9 @@ Rails.application.routes.draw do
 
       resources :events, only: %i[create]
 
-      resources :messages, only: %i[index]
+      resources :messages, only: %i[index] do
+        post :replay, on: :member
+      end
 
       resources :ingest_rejections, only: %i[index]
 
@@ -60,6 +62,10 @@ Rails.application.routes.draw do
           end
           resources :messages, only: %i[show]
           resources :ingest_rejections, only: %i[index]
+          resources :replays, only: %i[create show] do
+            post :preview, on: :collection
+          end
+
           resources :api_credentials, only: %i[index create] do
             post :revoke, on: :member
           end

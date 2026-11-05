@@ -1,7 +1,5 @@
 module Messages
   class Deliver < ApplicationOperation
-    USER_AGENT = 'HookYard/1.0'
-
     Claim = Struct.new(:outcome, :attempt, :lease_expires_at, :retry_at, keyword_init: true)
 
     def initialize(http_client: Webhooks::HttpClient.new, signer: Webhooks::Signer)
@@ -43,19 +41,26 @@ module Messages
 
     def claim_locked
       endpoint = message.endpoint.reload
-      return Claim.new(outcome: :skipped) unless claimable?
 
-      return skip_while_not_enabled(endpoint) unless endpoint.enabled?
-      return Claim.new(outcome: :skipped) if message.held?
+      return skipped_claim unless claimable?
+      return skipped_claim if message.held?
+      return skipped_claim if endpoint.archived?
+      return skipped_claim if endpoint.paused?
+
+      return hold_for_inactive_endpoint(endpoint) unless endpoint.enabled?
       return exhaust_attempts unless message.retries_available?
       return reschedule_for_capacity if endpoint_at_capacity?
 
       claim_with_secret(endpoint)
     end
 
-    def skip_while_not_enabled(endpoint)
-      message.hold!(reason: endpoint.circuit_hold_reason) unless message.held?
+    def skipped_claim
       Claim.new(outcome: :skipped)
+    end
+
+    def hold_for_inactive_endpoint(endpoint)
+      message.hold!(reason: endpoint.circuit_hold_reason)
+      skipped_claim
     end
 
     def claimable?
@@ -120,56 +125,9 @@ module Messages
     end
 
     def attempt_attributes(secret, attempt_number)
-      signed_at = Time.current
-      request_id = "req_#{SecureRandom.uuid}"
-      body = webhook_body
-      webhook_id = message.webhook_id
-
-      {
-        attempt_number: attempt_number,
-        request_id: request_id,
-        webhook_id: webhook_id,
-        signing_secret_version: secret.version,
-        signed_at: signed_at,
-        request_url: request_url,
-        http_method: 'POST',
-        request_headers: request_headers(secret: secret, webhook_id: webhook_id, request_id: request_id, signed_at: signed_at, body: body),
-        request_body: body
-      }
-    end
-
-    def request_headers(secret:, webhook_id:, request_id:, signed_at:, body:)
-      {
-        'content-type' => 'application/json',
-        'user-agent' => USER_AGENT,
-        'webhook-id' => webhook_id,
-        'webhook-timestamp' => signed_at.to_i.to_s,
-        'webhook-signature' => signer.sign(secret: secret.secret, webhook_id: webhook_id, timestamp: signed_at, body: body),
-        'webhook-request-id' => request_id
-      }
-    end
-
-    def webhook_body
-      event = message.event
-
-      Oj.dump(
-        {
-          id: event.id,
-          type: event.event_type,
-          created_at: event.created_at.iso8601,
-          data: event.payload
-        },
-        mode: :compat
+      Webhooks::AttemptEvidence.attributes(
+        message: message, secret: secret, attempt_number: attempt_number, signer: signer
       )
-    end
-
-    def request_url
-      uri = URI.parse(message.endpoint.url)
-      uri.user = nil
-      uri.password = nil
-      uri.to_s
-    rescue URI::Error
-      message.endpoint.url
     end
 
     def next_attempt_number
@@ -266,22 +224,7 @@ module Messages
     end
 
     def resolve_circuit(endpoint, result)
-      if Webhooks::CircuitPolicy.success?(result)
-        reset_circuit_failures(endpoint)
-      elsif Webhooks::CircuitPolicy.counted_failure?(result)
-        register_circuit_failure(endpoint)
-      end
-    end
-
-    def reset_circuit_failures(endpoint)
-      return unless endpoint.enabled?
-      return if endpoint.circuit_failure_count.zero?
-
-      endpoint.update!(circuit_failure_count: 0)
-    end
-
-    def register_circuit_failure(endpoint)
-      endpoint.register_circuit_failure!
+      Webhooks::CircuitTracker.apply(endpoint: endpoint, result: result)
     end
 
     def retryable_result?(result)
