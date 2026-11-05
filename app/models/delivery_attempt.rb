@@ -57,6 +57,15 @@ class DeliveryAttempt < ApplicationRecord
   belongs_to :message
   belongs_to :replay_item, optional: true
 
+  scope :completed, -> { where('response_status IS NOT NULL OR error_type IS NOT NULL') }
+  # Diagnosis must see every attempt the pipeline has finished with, including the
+  # transport failures that never produced an HTTP status (timeout, DNS, TLS,
+  # connection reset). An attempt without any terminal evidence is still in flight.
+  scope :finished_for_diagnosis, lambda {
+    where('response_status IS NOT NULL OR error_type IS NOT NULL OR error_message IS NOT NULL')
+  }
+  scope :newest_first, -> { reorder(created_at: :desc, attempt_number: :desc) }
+
   validates :attempt_number, presence: true, numericality: { only_integer: true, greater_than: 0 }
   validates :attempt_number, uniqueness: { scope: :message_id }
   validates :request_id, :webhook_id, :request_url, :http_method, presence: true

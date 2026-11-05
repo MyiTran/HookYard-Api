@@ -21,6 +21,41 @@ describe DeliveryAttempt, type: :model do
     end
   end
 
+  describe '.finished_for_diagnosis' do
+    let(:message) { create(:message) }
+
+    def attempt(**attributes)
+      create(:delivery_attempt, message: message, **attributes)
+    end
+
+    it 'includes an attempt that received an HTTP response' do
+      recorded = attempt(response_status: 500)
+
+      expect(described_class.finished_for_diagnosis).to contain_exactly(recorded)
+    end
+
+    it 'includes transport failures that never received a response' do
+      timeout = attempt(error_type: Net::ReadTimeout.name, error_message: 'execution expired')
+      tls = attempt(error_type: OpenSSL::SSL::SSLError.name, error_message: 'certificate verify failed')
+      dns = attempt(error_type: SocketError.name, error_message: 'getaddrinfo: Name or service not known')
+      reset = attempt(error_type: Errno::ECONNRESET.name, error_message: 'connection reset by peer')
+
+      expect(described_class.finished_for_diagnosis).to contain_exactly(timeout, tls, dns, reset)
+    end
+
+    it 'includes a failure recorded without an error class' do
+      recorded = attempt(error_message: 'connection closed before the response was read')
+
+      expect(described_class.finished_for_diagnosis).to contain_exactly(recorded)
+    end
+
+    it 'excludes an attempt that is still in flight' do
+      attempt
+
+      expect(described_class.finished_for_diagnosis).to be_empty
+    end
+  end
+
   describe 'evidence immutability' do
     it 'does not allow the outbound request to be rewritten' do
       attempt.request_url = 'https://attacker.example/hooks'
