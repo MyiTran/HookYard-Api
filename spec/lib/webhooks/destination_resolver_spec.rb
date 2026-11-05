@@ -19,7 +19,7 @@ describe Webhooks::DestinationResolver do
                                               .and_return(['93.184.216.34', '169.254.169.254'])
 
         expect { described_class.new.resolve(URI.parse('https://hooks.example.com/hooks')) }
-          .to raise_error(described_class::NotPubliclyRoutable)
+          .to raise_error(described_class::NotPubliclyRoutable, described_class::NOT_ROUTABLE_MESSAGE)
       end
     end
 
@@ -28,7 +28,7 @@ describe Webhooks::DestinationResolver do
         expect(Resolv).not_to receive(:getaddresses)
 
         expect { described_class.new.resolve(URI.parse('http://billing.internal/hooks')) }
-          .to raise_error(described_class::NotPubliclyRoutable)
+          .to raise_error(described_class::NotPubliclyRoutable, described_class::NOT_ROUTABLE_MESSAGE)
       end
     end
 
@@ -86,7 +86,7 @@ describe Webhooks::DestinationResolver do
         allow(Resolv).to receive(:getaddresses).with('slow.example.com').and_raise(Timeout::Error)
 
         expect { described_class.new.resolve(URI.parse('https://slow.example.com/hooks')) }
-          .to raise_error(described_class::ResolutionFailed)
+          .to raise_error(described_class::ResolutionFailed, described_class::RESOLUTION_FAILED_MESSAGE)
       end
 
       it 'enforces its own lookup timeout' do
@@ -96,7 +96,7 @@ describe Webhooks::DestinationResolver do
         end
 
         expect { described_class.new(timeout: 0.01).resolve(URI.parse('https://slow.example.com/hooks')) }
-          .to raise_error(described_class::ResolutionFailed)
+          .to raise_error(described_class::ResolutionFailed, described_class::RESOLUTION_FAILED_MESSAGE)
       end
     end
 
@@ -106,14 +106,14 @@ describe Webhooks::DestinationResolver do
                                               .and_raise(Resolv::ResolvError)
 
         expect { described_class.new.resolve(URI.parse('https://broken.example.com/hooks')) }
-          .to raise_error(described_class::ResolutionFailed)
+          .to raise_error(described_class::ResolutionFailed, described_class::RESOLUTION_FAILED_MESSAGE)
       end
 
       it 'reports a transient resolution failure when the system resolver fails' do
         allow(Resolv).to receive(:getaddresses).with('broken.example.com').and_raise(SocketError)
 
         expect { described_class.new.resolve(URI.parse('https://broken.example.com/hooks')) }
-          .to raise_error(described_class::ResolutionFailed)
+          .to raise_error(described_class::ResolutionFailed, described_class::RESOLUTION_FAILED_MESSAGE)
       end
     end
 
@@ -122,7 +122,7 @@ describe Webhooks::DestinationResolver do
         allow(Resolv).to receive(:getaddresses).with('unresolvable.example.com').and_return([])
 
         expect { described_class.new.resolve(URI.parse('https://unresolvable.example.com/hooks')) }
-          .to raise_error(described_class::ResolutionFailed)
+          .to raise_error(described_class::ResolutionFailed, described_class::RESOLUTION_FAILED_MESSAGE)
       end
     end
   end

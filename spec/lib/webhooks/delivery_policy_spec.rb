@@ -33,6 +33,28 @@ describe Webhooks::DeliveryPolicy, type: :model do
     end
   end
 
+  describe '.attempt_offsets' do
+    it 'starts with an immediate attempt followed by the retry schedule' do
+      with_jitter(0.0)
+
+      expect(described_class.attempt_offsets).to eq([0.seconds] + described_class::DEFAULT_RETRY_DELAYS)
+    end
+
+    it 'allows eight total attempts including the first one' do
+      expect(described_class.attempt_offsets.size).to eq(described_class::MAX_ATTEMPTS)
+    end
+
+    context 'when the tenant is on the free plan' do
+      it 'keeps the fixed schedule even if override columns were persisted' do
+        project = build(:project, plan: 'free')
+        project.delivery_retry_delays_seconds = [120, 120, 120]
+
+        expect(described_class.attempt_offsets(project: project))
+          .to eq([0.seconds] + described_class::DEFAULT_RETRY_DELAYS)
+      end
+    end
+  end
+
   describe '.retry_delay' do
     it 'returns the exact base schedule when the jitter source is zero' do
       with_jitter(0.0)
@@ -50,18 +72,34 @@ describe Webhooks::DeliveryPolicy, type: :model do
       end
     end
 
-    it 'applies the bounded jitter on top of the base schedule' do
+    it 'applies the bounded jitter to every retryable attempt' do
       with_jitter(0.5)
 
-      expect(described_class.retry_delay(2)).to eq(5.minutes * 1.1)
+      expect(described_class.retry_delay(1)).to be_within(0.001).of(5.5.seconds)
+      expect(described_class.retry_delay(2)).to be_within(0.001).of(5.minutes + 30.seconds)
+      expect(described_class.retry_delay(3)).to be_within(0.001).of(33.minutes)
+      expect(described_class.retry_delay(4)).to be_within(0.001).of(2.hours + 12.minutes)
+      expect(described_class.retry_delay(5)).to be_within(0.001).of(5.hours + 30.minutes)
+      expect(described_class.retry_delay(6)).to be_within(0.001).of(11.hours)
+      expect(described_class.retry_delay(7)).to be_within(0.001).of(11.hours)
     end
 
-    it 'never returns a delay earlier than the base schedule and never exceeds the jitter window' do
-      with_jitter(0.999)
-      delayed = described_class.retry_delay(2)
+    context 'when the jitter spans its bounds' do
+      it 'keeps every retry between the base delay and the twenty percent cap' do
+        with_jitter(0.0)
 
-      expect(delayed).to be > 5.minutes
-      expect(delayed).to be < 5.minutes * 1.2
+        expect((1..7).map { |attempts_made| described_class.retry_delay(attempts_made) })
+          .to eq(described_class::DEFAULT_RETRY_DELAYS)
+
+        with_jitter(0.999999)
+
+        described_class::DEFAULT_RETRY_DELAYS.each_with_index do |base_delay, index|
+          delayed = described_class.retry_delay(index + 1)
+
+          expect(delayed).to be > base_delay
+          expect(delayed).to be < base_delay * (1 + described_class::JITTER_RATIO)
+        end
+      end
     end
 
     it 'returns nil once every attempt has been used' do
@@ -83,24 +121,47 @@ describe Webhooks::DeliveryPolicy, type: :model do
         expect(described_class.retry_delay(5)).to be_nil
       end
     end
-  end
 
-  describe '.retry_delay with a project override' do
-    it 'uses the project schedule only on the pro plan' do
-      pro_project = build(:project, plan: Project::PRO_PLAN, delivery_retry_delays_seconds: [10, 20, 40, 80, 160, 320, 640])
-      with_jitter(0.0)
+    context 'when the tenant is on the free plan' do
+      it 'uses the fixed default schedule' do
+        project = build(:project, plan: 'free')
+        with_jitter(0.0)
 
-      expect(described_class.retry_delay(1, project: pro_project)).to eq(10.seconds)
-      expect(described_class.retry_delay(3, project: pro_project)).to eq(40.seconds)
-      expect(described_class.retry_delay(1, project: build(:project))).to eq(5.seconds)
+        expect(described_class.retry_delays_for(project)).to eq(described_class::DEFAULT_RETRY_DELAYS)
+        expect(described_class.retry_delay(1, project: project)).to eq(5.seconds)
+      end
+    end
+
+    context 'when the tenant is on the pro plan' do
+      it 'uses the configured retry delays' do
+        project = build(:project, plan: Project::PRO_PLAN, delivery_retry_delays_seconds: [10, 20, 40, 80, 160, 320, 640])
+        with_jitter(0.0)
+
+        expect(described_class.retry_delays_for(project)).to eq([10, 20, 40, 80, 160, 320, 640].map(&:seconds))
+        expect(described_class.retry_delay(1, project: project)).to eq(10.seconds)
+        expect(described_class.retry_delay(3, project: project)).to eq(40.seconds)
+      end
     end
   end
 
-  describe '.attempt_offsets' do
-    it 'starts with an immediate attempt followed by the retry schedule' do
-      with_jitter(0.0)
+  describe '.timeout_seconds_for' do
+    it 'defaults the free plan to fifteen seconds and ignores persisted override columns' do
+      project = build(:project, plan: 'free')
+      project.delivery_timeout_seconds = 30
 
-      expect(described_class.attempt_offsets).to eq([0.seconds] + described_class::DEFAULT_RETRY_DELAYS)
+      expect(described_class.timeout_seconds_for(project)).to eq(15)
+      expect(described_class.timeout_seconds_for(build(:project))).to eq(15)
+      expect(described_class.timeout_seconds_for(nil)).to eq(15)
+    end
+
+    it 'returns the configured timeout for the pro plan' do
+      project = build(:project, plan: Project::PRO_PLAN, delivery_timeout_seconds: 25)
+
+      expect(described_class.timeout_seconds_for(project)).to eq(25)
+    end
+
+    it 'falls back to the default when the pro plan has no override' do
+      expect(described_class.timeout_seconds_for(build(:project, plan: Project::PRO_PLAN))).to eq(15)
     end
   end
 
@@ -113,19 +174,9 @@ describe Webhooks::DeliveryPolicy, type: :model do
 
     it 'stays inside the bounded jitter window' do
       with_jitter(0.999)
-      delayed = described_class.capacity_retry_delay
 
-      expect(delayed).to be > described_class::CAPACITY_RETRY_DELAY
-      expect(delayed).to be < described_class::CAPACITY_RETRY_DELAY * 1.2
-    end
-  end
-
-  describe '.timeout_seconds_for' do
-    it 'falls back to the default timeout unless a pro project overrides it' do
-      expect(described_class.timeout_seconds_for(build(:project))).to eq(15)
-      expect(described_class.timeout_seconds_for(build(:project, plan: Project::PRO_PLAN, delivery_timeout_seconds: 25)))
-        .to eq(25)
-      expect(described_class.timeout_seconds_for(nil)).to eq(15)
+      expect(described_class.capacity_retry_delay).to be > described_class::CAPACITY_RETRY_DELAY
+      expect(described_class.capacity_retry_delay).to be < described_class::CAPACITY_RETRY_DELAY * 1.2
     end
   end
 
