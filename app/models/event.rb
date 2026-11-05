@@ -13,6 +13,7 @@
 #
 # Indexes
 #
+#  index_events_on_event_type                      (event_type)
 #  index_events_on_project_id                      (project_id)
 #  index_events_on_project_id_and_created_at       (project_id,created_at)
 #  index_events_on_project_id_and_idempotency_key  (project_id,idempotency_key) UNIQUE

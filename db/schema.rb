@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_10_29_110000) do
+ActiveRecord::Schema[8.0].define(version: 2026_11_03_100100) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -110,7 +110,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_29_110000) do
     t.text "request_url", null: false
     t.string "http_method", default: "POST", null: false
     t.jsonb "request_headers", default: {}, null: false
-    t.text "request_body", null: false
+    t.text "request_body"
     t.integer "response_status"
     t.jsonb "response_headers"
     t.text "response_body"
@@ -119,9 +119,12 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_29_110000) do
     t.text "error_message"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.datetime "bodies_purged_at"
+    t.index ["created_at"], name: "index_delivery_attempts_on_bodies_pending_purge", where: "((bodies_purged_at IS NULL) AND ((response_status IS NOT NULL) OR (error_type IS NOT NULL)))"
     t.index ["message_id", "attempt_number"], name: "index_delivery_attempts_on_message_id_and_attempt_number", unique: true
     t.index ["message_id", "created_at"], name: "index_delivery_attempts_on_message_id_and_created_at"
     t.index ["message_id"], name: "index_delivery_attempts_on_message_id"
+    t.index ["request_id"], name: "index_delivery_attempts_on_request_id"
     t.check_constraint "response_status IS NULL OR response_status >= 100 AND response_status <= 599", name: "delivery_attempts_response_status_range"
     t.check_constraint "signing_secret_version > 0", name: "delivery_attempts_signing_secret_version_positive"
   end
@@ -172,6 +175,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_29_110000) do
     t.string "idempotency_fingerprint", null: false
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.index ["event_type"], name: "index_events_on_event_type"
     t.index ["project_id", "created_at"], name: "index_events_on_project_id_and_created_at"
     t.index ["project_id", "idempotency_key"], name: "index_events_on_project_id_and_idempotency_key", unique: true
     t.index ["project_id"], name: "index_events_on_project_id"
@@ -187,6 +191,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_29_110000) do
     t.jsonb "payload", default: {}, null: false
     t.datetime "created_at", null: false
     t.string "idempotency_key_digest"
+    t.index ["created_at", "id"], name: "index_ingest_rejections_on_created_at_and_id"
     t.index ["endpoint_id"], name: "index_ingest_rejections_on_endpoint_id"
     t.index ["project_id", "created_at"], name: "index_ingest_rejections_on_project_id_and_created_at"
     t.index ["project_id"], name: "index_ingest_rejections_on_project_id"
@@ -205,6 +210,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_29_110000) do
     t.datetime "queued_at"
     t.datetime "held_at"
     t.string "hold_reason"
+    t.index ["created_at", "id"], name: "index_messages_on_created_at_and_id"
     t.index ["delivery_lease_expires_at"], name: "index_messages_on_active_delivery_lease", where: "((status)::text = 'delivering'::text)"
     t.index ["endpoint_id", "created_at"], name: "index_messages_on_endpoint_id_and_created_at"
     t.index ["endpoint_id", "held_at"], name: "index_messages_on_endpoint_id_and_held_at"

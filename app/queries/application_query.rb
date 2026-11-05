@@ -27,6 +27,8 @@
 # Products::GeneralQuery.call(Product.on_sale, name: 'phone', price: 1000)
 #
 class ApplicationQuery
+  UUID_FORMAT = /\A\h{8}-\h{4}-\h{4}-\h{4}-\h{12}\z/
+
   def self.call(...)
     new.call(...)
   end
@@ -57,5 +59,15 @@ class ApplicationQuery
       column = value[1..-1]
     end
     [column, direction]
+  end
+
+  def valid_uuid?(value)
+    value.to_s.match?(UUID_FORMAT)
+  end
+
+  def parsed_time(value)
+    Time.zone.parse(value.to_s)
+  rescue ArgumentError
+    nil
   end
 end

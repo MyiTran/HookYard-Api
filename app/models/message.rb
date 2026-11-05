@@ -19,6 +19,7 @@
 # Indexes
 #
 #  index_messages_on_active_delivery_lease       (delivery_lease_expires_at) WHERE ((status)::text = 'delivering'::text)
+#  index_messages_on_created_at_and_id           (created_at,id)
 #  index_messages_on_endpoint_id                 (endpoint_id)
 #  index_messages_on_endpoint_id_and_created_at  (endpoint_id,created_at)
 #  index_messages_on_endpoint_id_and_held_at     (endpoint_id,held_at)

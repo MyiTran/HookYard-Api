@@ -15,13 +15,18 @@ class AccountSerializer < ApplicationSerializer
     Plans::Entitlements.monthly_delivery_limit(account)
   end
 
+  field :body_retention_days do |account|
+    Plans::Entitlements.body_retention_days(account)
+  end
+
   field :available_plans do
     Plans::Entitlements::DEFINITIONS.map do |plan, definition|
       {
         plan: plan,
         project_limit: definition.project_limit,
         endpoint_limit_per_project: definition.endpoint_limit,
-        monthly_delivery_limit: definition.monthly_delivery_limit
+        monthly_delivery_limit: definition.monthly_delivery_limit,
+        body_retention_days: definition.body_retention_days
       }
     end
   end
