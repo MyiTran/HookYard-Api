@@ -1,6 +1,7 @@
 module Messages
   class DeliverJob < ApplicationJob
     queue_as :default
+    sidekiq_options retry: false
 
     discard_on ActiveRecord::RecordNotFound
 

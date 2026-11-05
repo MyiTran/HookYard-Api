@@ -66,6 +66,14 @@ module Api
           render_resource(endpoint, signing_secret: secret.secret, view: :with_signing_secret)
         end
 
+        def re_enable
+          endpoint = @project.endpoints.find(params[:id])
+          authorize endpoint, :re_enable?
+          Endpoints::ReEnable.call(endpoint: endpoint)
+
+          render_resource(endpoint)
+        end
+
         private
 
         def set_project

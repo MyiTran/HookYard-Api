@@ -4,6 +4,8 @@ module Webhooks
   # predictable across workers and restarts.
   class DeliveryPolicy
     HTTP_TIMEOUT_SECONDS = 15
+    MIN_HTTP_TIMEOUT_SECONDS = 1
+    MAX_HTTP_TIMEOUT_SECONDS = 30
     MAX_ATTEMPTS = 8
 
     # Delay inserted after the given attempt: attempt 1 is immediate, so the
@@ -29,6 +31,7 @@ module Webhooks
       Net::OpenTimeout
       Net::ReadTimeout
       Net::WriteTimeout
+      Webhooks::DestinationResolver::ResolutionFailed
       Errno::ECONNABORTED
       Errno::ECONNREFUSED
       Errno::ECONNRESET
@@ -37,7 +40,6 @@ module Webhooks
       Errno::EPIPE
       Errno::ETIMEDOUT
       SocketError
-      Webhooks::DestinationResolver::ResolutionFailed
       OpenSSL::SSL::SSLError
       IOError
       EOFError
@@ -45,6 +47,32 @@ module Webhooks
     ].freeze
 
     class << self
+      attr_writer :jitter_source
+
+      def jitter_source
+        @jitter_source ||= -> { rand }
+      end
+
+      def reset_jitter_source!
+        @jitter_source = nil
+      end
+
+      def attempt_offsets(project: nil)
+        [0.seconds] + retry_delays_for(project)
+      end
+
+      def retry_delays_for(project)
+        configured = project&.pro? ? project.delivery_retry_delays_seconds : nil
+        return RETRY_DELAYS if configured.blank?
+
+        configured.map { |seconds| seconds.seconds }
+      end
+
+      def timeout_seconds_for(project)
+        configured = project&.pro? ? project.delivery_timeout_seconds : nil
+        configured || HTTP_TIMEOUT_SECONDS
+      end
+
       def retryable?(result)
         return retryable_error?(result.error_type) if result.error?
 
@@ -61,27 +89,25 @@ module Webhooks
         RETRYABLE_ERROR_TYPES.include?(error_type.to_s)
       end
 
-      def retry_delay(attempts_made)
+      def retry_delay(attempts_made, project: nil)
         return nil if attempts_made < 1 || attempts_made >= MAX_ATTEMPTS
 
-        base_delay = RETRY_DELAYS[attempts_made - 1]
+        base_delay = retry_delays_for(project)[attempts_made - 1]
         return nil if base_delay.nil?
 
-        apply_jitter(base_delay)
+        jittered(base_delay)
       end
 
       def capacity_retry_delay
-        apply_jitter(CAPACITY_RETRY_DELAY)
+        jittered(CAPACITY_RETRY_DELAY)
       end
 
       def delivery_lease_duration
         DELIVERY_LEASE_SECONDS.seconds
       end
 
-      private
-
-      def apply_jitter(base_delay)
-        base_delay * (1 + (JITTER_RATIO * rand))
+      def jittered(base_duration)
+        base_duration * (1 + (JITTER_RATIO * jitter_source.call))
       end
     end
   end
