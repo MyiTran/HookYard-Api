@@ -36,6 +36,24 @@ describe DeliveryAttempts::PurgeBodies, type: :operation do
         expect(attempt.bodies_purged_at).to eq(now)
       end
 
+      it 'applies the same retention window to replay attempts' do
+        message = create(:message, project: project)
+        item = create(:replay_item, message: message)
+        attempt = create(
+          :delivery_attempt,
+          message: message,
+          replay_item: item,
+          created_at: now - 4.days,
+          updated_at: now - 4.days,
+          response_status: 204
+        )
+
+        described_class.call(now: now)
+
+        expect(attempt.reload.bodies_purged_at).to eq(now)
+        expect(item.reload).to be_persisted
+      end
+
       it 'keeps the bodies of an attempt younger than three days' do
         attempt = create_attempt(project: project, created_at: now - 2.days)
 

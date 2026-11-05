@@ -44,6 +44,12 @@ describe CircuitProbes::Run, type: :operation do
                        .map { |job| job[:args].first }
   end
 
+  def enqueued_replay_ids
+    ActiveJob::Base.queue_adapter.enqueued_jobs
+                       .select { |job| job[:job] == Replays::DeliverJob }
+                       .map { |job| job[:args].first }
+  end
+
   describe '.call' do
     context 'when the circuit is open and the probe is due' do
       before { open_circuit }
@@ -164,6 +170,23 @@ describe CircuitProbes::Run, type: :operation do
 
         expect(messages.map { |message| message.reload.held_at }).to all(be_nil)
         expect(enqueued_delivery_ids).to match_array(messages.map(&:id))
+      end
+
+      it 'releases held replay items after a successful probe' do
+        run = create(:replay_run, project: project)
+        items = Array.new(2) do
+          message = create(:message, project: project, endpoint: endpoint, status: :failed)
+
+          create(:replay_item, replay_run: run, message: message, endpoint: endpoint,
+                               status: ReplayItem::HELD_STATUS,
+                               hold_reason: ReplayItem::HOLD_REASON_CIRCUIT_OPEN)
+        end
+        allow(http_client).to receive(:post).and_return(http_result(status: 200))
+
+        operation.call(endpoint: endpoint)
+
+        expect(items.map { |item| item.reload.status }).to all(eq(ReplayItem::QUEUED_STATUS))
+        expect(enqueued_replay_ids).to match_array(items.map(&:id))
       end
 
       it 'recovers a pending message that lost its hold with a stale pre-circuit retry' do
