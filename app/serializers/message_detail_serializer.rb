@@ -20,6 +20,10 @@ class MessageDetailSerializer < ApplicationSerializer
     message.delivery_attempts.last&.failure_category
   end
 
+  field :replay do |message|
+    Replays::Eligibility.summary_for(message)
+  end
+
   field :event do |message|
     {
       id: message.event.id,

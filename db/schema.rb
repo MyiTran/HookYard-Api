@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_11_03_100100) do
+ActiveRecord::Schema[8.0].define(version: 2026_11_03_110200) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -120,10 +120,12 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_03_100100) do
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.datetime "bodies_purged_at"
+    t.uuid "replay_item_id"
     t.index ["created_at"], name: "index_delivery_attempts_on_bodies_pending_purge", where: "((bodies_purged_at IS NULL) AND ((response_status IS NOT NULL) OR (error_type IS NOT NULL)))"
     t.index ["message_id", "attempt_number"], name: "index_delivery_attempts_on_message_id_and_attempt_number", unique: true
     t.index ["message_id", "created_at"], name: "index_delivery_attempts_on_message_id_and_created_at"
     t.index ["message_id"], name: "index_delivery_attempts_on_message_id"
+    t.index ["replay_item_id"], name: "index_delivery_attempts_on_replay_item_id", unique: true
     t.index ["request_id"], name: "index_delivery_attempts_on_request_id"
     t.check_constraint "response_status IS NULL OR response_status >= 100 AND response_status <= 599", name: "delivery_attempts_response_status_range"
     t.check_constraint "signing_secret_version > 0", name: "delivery_attempts_signing_secret_version_positive"
@@ -299,6 +301,45 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_03_100100) do
     t.check_constraint "delivery_timeout_seconds IS NULL OR delivery_timeout_seconds >= 1 AND delivery_timeout_seconds <= 30", name: "projects_delivery_timeout_seconds_range"
   end
 
+  create_table "replay_items", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "replay_run_id", null: false
+    t.uuid "message_id", null: false
+    t.uuid "endpoint_id", null: false
+    t.string "status", default: "queued", null: false
+    t.string "hold_reason"
+    t.string "skip_reason"
+    t.string "error_type"
+    t.text "error_message"
+    t.datetime "delivery_lease_expires_at"
+    t.datetime "started_at"
+    t.datetime "completed_at"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["endpoint_id", "status"], name: "index_replay_items_on_endpoint_id_and_status"
+    t.index ["endpoint_id"], name: "index_replay_items_on_endpoint_id"
+    t.index ["message_id"], name: "index_replay_items_on_active_message", unique: true, where: "((status)::text = ANY ((ARRAY['queued'::character varying, 'held'::character varying, 'delivering'::character varying])::text[]))"
+    t.index ["message_id"], name: "index_replay_items_on_message_id"
+    t.index ["replay_run_id", "status"], name: "index_replay_items_on_replay_run_id_and_status"
+    t.index ["replay_run_id"], name: "index_replay_items_on_replay_run_id"
+    t.check_constraint "status::text = ANY (ARRAY['queued'::character varying, 'held'::character varying, 'delivering'::character varying, 'succeeded'::character varying, 'failed'::character varying, 'skipped'::character varying]::text[])", name: "replay_items_status_valid"
+  end
+
+  create_table "replay_runs", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "project_id", null: false
+    t.uuid "actor_id", null: false
+    t.string "mode", default: "single", null: false
+    t.jsonb "filters", default: {}, null: false
+    t.integer "requested_count", default: 0, null: false
+    t.datetime "materialized_at"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["actor_id"], name: "index_replay_runs_on_actor_id"
+    t.index ["project_id", "created_at"], name: "index_replay_runs_on_project_id_and_created_at"
+    t.index ["project_id"], name: "index_replay_runs_on_project_id"
+    t.check_constraint "mode::text = ANY (ARRAY['single'::character varying, 'bulk'::character varying]::text[])", name: "replay_runs_mode_valid"
+    t.check_constraint "requested_count >= 0", name: "replay_runs_requested_count_non_negative"
+  end
+
   create_table "roles", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.string "name"
     t.string "resource_type"
@@ -361,6 +402,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_03_100100) do
   add_foreign_key "cable_tickets", "users", on_delete: :cascade
   add_foreign_key "circuit_probes", "endpoints", on_delete: :cascade
   add_foreign_key "delivery_attempts", "messages", on_delete: :cascade
+  add_foreign_key "delivery_attempts", "replay_items", on_delete: :nullify
   add_foreign_key "endpoint_signing_secrets", "endpoints", on_delete: :cascade
   add_foreign_key "endpoints", "projects", on_delete: :cascade
   add_foreign_key "events", "projects", on_delete: :cascade
@@ -379,5 +421,10 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_03_100100) do
   add_foreign_key "project_memberships", "projects", on_delete: :cascade
   add_foreign_key "project_memberships", "users", on_delete: :cascade
   add_foreign_key "projects", "users", column: "billing_owner_id", on_delete: :restrict
+  add_foreign_key "replay_items", "endpoints", on_delete: :cascade
+  add_foreign_key "replay_items", "messages", on_delete: :cascade
+  add_foreign_key "replay_items", "replay_runs", on_delete: :cascade
+  add_foreign_key "replay_runs", "projects", on_delete: :cascade
+  add_foreign_key "replay_runs", "users", column: "actor_id"
   add_foreign_key "user_usage_periods", "users", on_delete: :cascade
 end

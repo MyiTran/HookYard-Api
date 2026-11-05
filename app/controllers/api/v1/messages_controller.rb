@@ -25,6 +25,17 @@ module Api
           pagy: pagy
         )
       end
+
+      def replay
+        message = policy_scope(Message)
+                  .preload(:event, :delivery_attempts, :active_replay_item, :latest_replay_item, endpoint: :project)
+                  .find(params[:id])
+        authorize message, :replay?
+
+        run = Replays::Create.call(message: message, actor: current_user)
+
+        render_resource(run, serializer: ReplayRunSerializer, view: :with_items, status: :accepted)
+      end
     end
   end
 end

@@ -1,6 +1,5 @@
 module CircuitProbes
   class Run < ApplicationOperation
-    # Receivers must treat this payload as a health check and never as a business event.
     PAYLOAD_TYPE = 'endpoint.test'
     ID_PREFIX = 'probe_'
     USER_AGENT = 'HookYard/1.0'
@@ -171,6 +170,7 @@ module CircuitProbes
       end
 
       Messages::ReleaseHeld.call(endpoint: endpoint) if closed_circuit
+      Replays::ReleaseHeld.call(endpoint: endpoint) if closed_circuit
     end
 
     def owns_lease?(claim)
