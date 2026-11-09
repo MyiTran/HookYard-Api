@@ -256,7 +256,7 @@ describe Message, type: :model do
       end
 
       it 'decrements the endpoint queue count exactly once' do
-        endpoint.update!(queued_message_count: 2)
+        endpoint.update_columns(queued_message_count: 2)
         message.update_columns(queued_at: Time.current)
 
         message.mark_failed!

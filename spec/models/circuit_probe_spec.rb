@@ -59,7 +59,7 @@ describe CircuitProbe, type: :model do
     end
 
     it 'is true once a result was recorded' do
-      probe.update!(status: :succeeded, completed_at: Time.current, response_status: 204)
+      probe.update_columns(status: 'succeeded', completed_at: Time.current, response_status: 204)
 
       expect(probe.completed?).to be(true)
     end

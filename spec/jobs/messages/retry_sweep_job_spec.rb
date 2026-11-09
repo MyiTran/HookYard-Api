@@ -28,15 +28,11 @@ describe Messages::RetrySweepJob, type: :job do
     end
 
     it 'runs stale lease recovery, due retry enqueueing and circuit probe scheduling' do
-      allow(Messages::RecoverStaleLeases).to receive(:call)
-      allow(Messages::EnqueueDueRetries).to receive(:call)
-      allow(CircuitProbes::Schedule).to receive(:call)
+      expect(Messages::RecoverStaleLeases).to receive(:call).once.ordered
+      expect(Messages::EnqueueDueRetries).to receive(:call).once.ordered
+      expect(CircuitProbes::Schedule).to receive(:call).once.ordered
 
       described_class.new.perform
-
-      expect(Messages::RecoverStaleLeases).to have_received(:call).ordered
-      expect(Messages::EnqueueDueRetries).to have_received(:call).ordered
-      expect(CircuitProbes::Schedule).to have_received(:call).ordered
     end
 
     it 'recovers stale leases and enqueues due retries' do

@@ -15,11 +15,9 @@ describe Messages::DeliverJob, type: :job do
   describe '#perform' do
     it 'delegates the delivery to Messages::Deliver' do
       message = create(:message)
-      allow(Messages::Deliver).to receive(:call)
+      expect(Messages::Deliver).to receive(:call).with(message: message).once
 
       described_class.perform_now(message.id)
-
-      expect(Messages::Deliver).to have_received(:call).with(message: message)
     end
 
     it 'discards a message that no longer exists' do

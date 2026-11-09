@@ -98,6 +98,14 @@ describe Messages::BackfillCircuitQueueTracking, type: :operation do
       end
     end
 
+    it 'reconciles every endpoint through Messages::ReconcileQueue' do
+      other_endpoint = create(:endpoint, project: project)
+      expect(Messages::ReconcileQueue).to receive(:call).with(endpoint: endpoint).once.and_call_original
+      expect(Messages::ReconcileQueue).to receive(:call).with(endpoint: other_endpoint).once.and_call_original
+
+      described_class.call
+    end
+
     context 'when a message reached a terminal state without releasing its slot' do
       it 'releases the slot and clears the counter' do
         finished = message(status: 'succeeded')

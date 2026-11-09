@@ -316,7 +316,7 @@ describe Endpoint, type: :model do
 
     it 'leaves the previous current secret intact when rotation fails' do
       previous = endpoint.current_signing_secret
-      allow(endpoint).to receive(:new_signing_secret).and_raise(ActiveRecord::RecordNotUnique)
+      expect(endpoint).to receive(:new_signing_secret).once.and_raise(ActiveRecord::RecordNotUnique)
 
       expect { endpoint.rotate_signing_secret! }.to raise_error(ActiveRecord::RecordNotUnique)
 
@@ -506,7 +506,7 @@ describe Endpoint, type: :model do
     let(:ignored_failure) { http_result(status: 404) }
 
     it 'opens the circuit on the fifth consecutive failure' do
-      endpoint.update!(circuit_failure_count: Webhooks::CircuitPolicy::FAILURE_THRESHOLD - 1)
+      endpoint.update_columns(circuit_failure_count: Webhooks::CircuitPolicy::FAILURE_THRESHOLD - 1)
 
       endpoint.register_circuit_failure!(counted_failure)
 
@@ -538,7 +538,7 @@ describe Endpoint, type: :model do
 
     before do
       endpoint.open_circuit!(at: opened_at)
-      endpoint.update!(circuit_failure_count: 0)
+      endpoint.update_columns(circuit_failure_count: 0)
     end
 
     context 'when the disable window is still running' do
