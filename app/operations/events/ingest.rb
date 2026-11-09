@@ -43,7 +43,7 @@ module Events
     rescue ActiveRecord::RecordNotUnique
       [existing_event!(project, attributes), [], false]
     rescue EndpointQueueFull => e
-      record_rejection(project, attributes, e.endpoint)
+      record_rejection!(project, attributes, e.endpoint)
       raise ApiError::QueueCapacityExceededError
     end
 
@@ -59,7 +59,7 @@ module Events
       raise EndpointQueueFull.new(full_endpoint) if full_endpoint
     end
 
-    def record_rejection(project, attributes, endpoint)
+    def record_rejection!(project, attributes, endpoint)
       IngestRejection.create!(
         project: project,
         endpoint: endpoint,

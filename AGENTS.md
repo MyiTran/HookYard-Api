@@ -346,3 +346,10 @@ After implementation, report:
 - focused test results
 - manual verification
 - remaining risks / limitations
+
+## 15. Migrations, backfills, validations, naming
+
+- Migrations are **schema-only**. No data-mutation SQL (`UPDATE`, `INSERT`, `DELETE`, counter recalculation, data repair, backfill) inside a migration.
+- One-off data backfills are an **idempotent operation + manually triggered low-priority ActiveJob**, never a recurring cron entry.
+- Do **not** use `add_check_constraint` for domain validation; put the rule in the ActiveRecord model and cover valid/invalid behavior with model specs. Reserve DB constraints for integrity/performance invariants that validations cannot reach.
+- A domain helper that mutates persisted state or invokes a bang method must itself end in `!`. Predicates, queries, serializers and operation entrypoints (`#call`) keep their plain names.

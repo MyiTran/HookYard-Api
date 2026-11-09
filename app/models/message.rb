@@ -66,6 +66,8 @@ class Message < ApplicationRecord
   scope :terminal, -> { where(status: %w[succeeded failed]) }
 
   validate :event_and_endpoint_share_project
+  validates :hold_reason, inclusion: { in: Webhooks::CircuitPolicy::HOLD_REASONS.values }, allow_nil: true
+  validate :hold_state_is_consistent
 
   def self.delivery_state_scope(state)
     scope_name = DELIVERY_STATE_SCOPES[state.to_s]
@@ -113,10 +115,6 @@ class Message < ApplicationRecord
     )
   end
 
-  def release_hold!
-    update!(held_at: nil, hold_reason: nil) if held?
-  end
-
   private
 
   def finish!(status:, at:)
@@ -131,8 +129,18 @@ class Message < ApplicationRecord
                     .update_all(queued_at: nil, updated_at: Time.current)
     return unless released == 1
 
-    Endpoint.where(id: endpoint_id)
+    Endpoint.where(id: endpoint_id).where('queued_message_count > 0')
             .update_all('queued_message_count = queued_message_count - 1')
+  end
+
+  def hold_state_is_consistent
+    unless held?
+      errors.add(:held_at, 'must be present while the message has a hold reason') if hold_reason.present?
+      return
+    end
+
+    errors.add(:status, 'must be pending while the message is held') unless pending?
+    errors.add(:hold_reason, 'must be present while the message is held') if hold_reason.blank?
   end
 
   def event_and_endpoint_share_project
