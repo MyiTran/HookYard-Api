@@ -27,6 +27,23 @@ describe CircuitProbe, type: :model do
       end
     end
 
+    context 'when the status is not a probe status' do
+      it 'is rejected' do
+        probe.status = 'unknown'
+
+        expect(probe).not_to be_valid
+        expect(probe.errors[:status]).to be_present
+      end
+    end
+
+    context 'when the status is a probe status' do
+      it 'stays valid' do
+        described_class.statuses.each_key do |status|
+          expect(build(:circuit_probe, endpoint: endpoint, status: status)).to be_valid, "#{status} must be valid"
+        end
+      end
+    end
+
     context 'when a probe is recorded without a signing secret version' do
       it 'accepts the new record so the missing secret is recorded instead of skipped' do
         failed_probe = build(:circuit_probe, endpoint: endpoint, signing_secret_version: nil, status: :failed)

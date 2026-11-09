@@ -51,6 +51,52 @@ describe Message, type: :model do
         expect(message.errors[:attempt_count]).to be_present
       end
     end
+
+    context 'when the message carries no hold' do
+      it 'accepts a nil hold reason' do
+        expect(build(:message, held_at: nil, hold_reason: nil)).to be_valid
+      end
+    end
+
+    context 'when the message is held by the circuit' do
+      it 'accepts every hold reason the circuit can produce' do
+        Webhooks::CircuitPolicy::HOLD_REASONS.each_value do |reason|
+          held_message = build(:message, status: :pending, held_at: Time.current, hold_reason: reason)
+
+          expect(held_message).to be_valid, "#{reason} must be a valid hold reason"
+        end
+      end
+
+      it 'rejects a hold reason the circuit cannot produce' do
+        held_message = build(:message, status: :pending, held_at: Time.current, hold_reason: 'manual_review')
+
+        expect(held_message).not_to be_valid
+        expect(held_message.errors[:hold_reason]).to be_present
+      end
+
+      it 'requires a hold reason' do
+        held_message = build(:message, status: :pending, held_at: Time.current, hold_reason: nil)
+
+        expect(held_message).not_to be_valid
+        expect(held_message.errors[:hold_reason]).to be_present
+      end
+
+      it 'refuses to hold a message that is no longer pending' do
+        held_message = build(:message, status: :delivering, held_at: Time.current, hold_reason: hold_reason)
+
+        expect(held_message).not_to be_valid
+        expect(held_message.errors[:status]).to be_present
+      end
+    end
+
+    context 'when a hold reason survived on a message that is not held' do
+      it 'is invalid' do
+        stale_message = build(:message, status: :pending, held_at: nil, hold_reason: hold_reason)
+
+        expect(stale_message).not_to be_valid
+        expect(stale_message.errors[:held_at]).to be_present
+      end
+    end
   end
 
   describe 'delivery target uniqueness' do
@@ -237,12 +283,12 @@ describe Message, type: :model do
     end
 
     context 'when circuit hold fields are written to a failed message' do
-      it 'is rejected by the database' do
+      it 'is rejected by the model' do
         message.mark_failed!
+        message.assign_attributes(held_at: Time.current, hold_reason: 'endpoint_disabled')
 
-        expect do
-          message.update_columns(held_at: Time.current, hold_reason: 'endpoint_disabled')
-        end.to raise_error(ActiveRecord::StatementInvalid)
+        expect(message).not_to be_valid
+        expect(message.errors[:status]).to be_present
       end
     end
   end
@@ -290,16 +336,9 @@ describe Message, type: :model do
     end
   end
 
-  describe '#release_hold!' do
-    context 'when the message is held' do
-      it 'restores it as a plain pending message' do
-        message.hold!(reason: hold_reason)
-
-        message.release_hold!
-
-        expect(message.reload).not_to be_held
-        expect(message.hold_reason).to be_nil
-      end
+  describe 'hold release' do
+    it 'has no single-record release helper; holds are released in bulk' do
+      expect(described_class.method_defined?(:release_hold!)).to be(false)
     end
   end
 
