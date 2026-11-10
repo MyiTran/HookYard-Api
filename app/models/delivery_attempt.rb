@@ -43,6 +43,7 @@ class DeliveryAttempt < ApplicationRecord
   ERROR_MESSAGE_MAX_BYTES = Webhooks::ResponseEvidence::ERROR_MESSAGE_MAX_BYTES
   LEASE_EXPIRED_ERROR_TYPE = 'DeliveryLeaseExpired'
   LEASE_EXPIRED_MESSAGE = 'delivery lease expired before the attempt completed'
+  RESPONSE_SUCCESS_STATUSES = (200..299)
   SENSITIVE_HEADERS = Webhooks::ResponseEvidence::SENSITIVE_HEADERS
   EVIDENCE_FIELDS = %i[
     message_id attempt_number request_id webhook_id signing_secret_version signed_at
@@ -57,6 +58,21 @@ class DeliveryAttempt < ApplicationRecord
   belongs_to :message
   belongs_to :replay_item, optional: true
 
+  scope :completed, -> { where('response_status IS NOT NULL OR error_type IS NOT NULL') }
+  # Failure diagnosis must only see attempts the pipeline considers failed: a non-2xx
+  # response or a terminal transport error (timeout, DNS, TLS, connection reset). A 2xx
+  # delivery is a success and an attempt without terminal evidence is still in flight,
+  # so neither is failure evidence for the prompt.
+  scope :failed_for_diagnosis, lambda {
+    where(
+      'coalesce(response_status not between :from and :to, true) and ' \
+      '(response_status is not null or error_type is not null or error_message is not null)',
+      from: RESPONSE_SUCCESS_STATUSES.first,
+      to: RESPONSE_SUCCESS_STATUSES.last
+    )
+  }
+  scope :newest_first, -> { reorder(created_at: :desc, attempt_number: :desc) }
+
   validates :attempt_number, presence: true, numericality: { only_integer: true, greater_than: 0 }
   validates :attempt_number, uniqueness: { scope: :message_id }
   validates :request_id, :webhook_id, :request_url, :http_method, presence: true
@@ -66,7 +82,7 @@ class DeliveryAttempt < ApplicationRecord
   validate :evidence_is_immutable, on: :update
 
   def succeeded?
-    response_status.present? && response_status.between?(200, 299)
+    response_status.present? && RESPONSE_SUCCESS_STATUSES.cover?(response_status)
   end
 
   def transport_failed?
