@@ -10,7 +10,6 @@ module Ai
     RATE_LIMITED = 'rate_limited'
     TLS_FAILURE = 'tls_failure'
     ENDPOINT_GONE = 'endpoint_gone'
-    RECEIVER_SERVER_ERROR = 'receiver_server_error'
     UNKNOWN = 'unknown'
 
     LABELS = [
@@ -22,7 +21,6 @@ module Ai
       RATE_LIMITED,
       TLS_FAILURE,
       ENDPOINT_GONE,
-      RECEIVER_SERVER_ERROR,
       UNKNOWN
     ].freeze
 

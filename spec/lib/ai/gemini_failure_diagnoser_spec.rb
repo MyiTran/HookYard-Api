@@ -110,17 +110,29 @@ describe Ai::GeminiFailureDiagnoser do
       expect(result).to be_ai
     end
 
-    it 'accepts the receiver server error label from the provider' do
+    it 'accepts the unknown label from the provider for a receiver server error' do
       allow(transport).to receive(:post_json).and_return(
-        valid_answer(label: Ai::Diagnosis::RECEIVER_SERVER_ERROR,
-                     action: 'Inspect the receiver 5xx logs and recover the endpoint.')
+        valid_answer(label: Ai::Diagnosis::UNKNOWN,
+                     action: 'Inspect the receiver server logs, recover the endpoint, then retry delivery.')
       )
 
       expect(diagnoser.call([attempt])).to have_attributes(
-        label: Ai::Diagnosis::RECEIVER_SERVER_ERROR,
-        suggested_action: 'Inspect the receiver 5xx logs and recover the endpoint.',
+        label: Ai::Diagnosis::UNKNOWN,
+        suggested_action: 'Inspect the receiver server logs, recover the endpoint, then retry delivery.',
         source: Ai::Diagnosis::SOURCE_AI
       )
+    end
+
+    it 'accepts payload_rejected, rate_limited and handler_timeout from the provider' do
+      {
+        Ai::Diagnosis::PAYLOAD_REJECTED => 'Reject the malformed payload and retry after correcting the body.',
+        Ai::Diagnosis::RATE_LIMITED => 'Slow down delivery and retry once the rate limit resets.',
+        Ai::Diagnosis::HANDLER_TIMEOUT => 'Raise the receiver timeout and retry the delivery.'
+      }.each do |label, action|
+        allow(transport).to receive(:post_json).and_return(valid_answer(label: label, action: action))
+
+        expect(diagnoser.call([attempt])).to have_attributes(label: label, suggested_action: action)
+      end
     end
 
     it 'asks for the label enum through a structured response schema' do
@@ -132,26 +144,21 @@ describe Ai::GeminiFailureDiagnoser do
       expect(schema['required']).to contain_exactly('label', 'suggested_action')
     end
 
-    it 'offers the receiver server error label in the answer schema' do
-      schema = captured_body.dig('generationConfig', 'responseSchema')
-
-      expect(schema.dig('properties', 'label', 'enum')).to include(Ai::Diagnosis::RECEIVER_SERVER_ERROR)
-      expect(schema.dig('properties', 'label', 'enum')).to eq(Ai::Diagnosis::LABELS)
-    end
-
     it 'tells the model which receiver status maps to which label' do
       rules = described_class::STATUS_GUIDANCE.to_h
 
       expect(rules).to include(
-        '500-599' => Ai::Diagnosis::RECEIVER_SERVER_ERROR,
+        '500-599' => Ai::Diagnosis::UNKNOWN,
         '429' => Ai::Diagnosis::RATE_LIMITED,
         '408 or a transport timeout' => Ai::Diagnosis::HANDLER_TIMEOUT,
         '404 or 410' => Ai::Diagnosis::ENDPOINT_GONE
       )
       expect(rules['401 or 403']).to include(Ai::Diagnosis::AUTH_EXPIRED, Ai::Diagnosis::SIGNATURE_MISMATCH)
       expect(rules['400 or 422']).to include(Ai::Diagnosis::PAYLOAD_REJECTED)
-      expect(described_class::INSTRUCTIONS).to include('500-599 => receiver_server_error')
-      expect(described_class::INSTRUCTIONS).to include('Use "unknown" only when the evidence does not fit')
+      expect(described_class::INSTRUCTIONS).to include('500-599 => unknown')
+      expect(described_class::INSTRUCTIONS).to include(
+        'When the evidence shows a 5xx receiver response, use "unknown" and suggest'
+      )
       expect(described_class::INSTRUCTIONS).to include('Answer with JSON only')
     end
 

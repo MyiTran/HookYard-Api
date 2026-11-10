@@ -33,7 +33,7 @@ describe 'Endpoint failure diagnoses', type: :request do
         expect(response).to have_http_status(:created)
         expect(json_response.keys).to contain_exactly('label', 'suggested_action', 'source', 'created_at')
         expect(json_response).to include(
-          'label' => Ai::Diagnosis::RECEIVER_SERVER_ERROR,
+          'label' => Ai::Diagnosis::UNKNOWN,
           'source' => EndpointDiagnosis::SOURCE_FALLBACK
         )
         expect(json_response['suggested_action']).to be_present

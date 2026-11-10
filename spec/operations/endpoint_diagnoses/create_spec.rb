@@ -86,7 +86,7 @@ describe EndpointDiagnoses::Create, type: :operation do
       [Ai::Diagnosis::AUTH_EXPIRED, { response_status: 403 }],
       [Ai::Diagnosis::HANDLER_TIMEOUT, { response_status: nil, error_type: Net::ReadTimeout.name }],
       [Ai::Diagnosis::ENDPOINT_GONE, { response_status: 410 }],
-      [Ai::Diagnosis::RECEIVER_SERVER_ERROR, { response_status: 500 }],
+      [Ai::Diagnosis::UNKNOWN, { response_status: 500 }],
       [Ai::Diagnosis::UNKNOWN, { response_status: 302 }]
     ].each do |label, attributes|
       context "when the newest attempt failed with #{attributes.inspect}" do
@@ -99,18 +99,18 @@ describe EndpointDiagnoses::Create, type: :operation do
     end
 
     context 'when the receiver answers with a server error' do
-      it 'persists the receiver server error with a recovery action' do
+      it 'persists the unknown fallback with a recovery action' do
         attempt(response_status: 503)
 
         diagnosis = diagnose
 
         expect(diagnosis).to have_attributes(
-          label: Ai::Diagnosis::RECEIVER_SERVER_ERROR,
+          label: Ai::Diagnosis::UNKNOWN,
           source: EndpointDiagnosis::SOURCE_FALLBACK,
           model: nil
         )
         expect(diagnosis.suggested_action).to eq(
-          Ai::FallbackDiagnosis::ACTIONS.fetch(Ai::Diagnosis::RECEIVER_SERVER_ERROR)
+          Ai::FallbackDiagnosis::ACTIONS.fetch(Ai::Diagnosis::UNKNOWN)
         )
         expect(Ai::Diagnosis::LABELS).to include(diagnosis.label)
       end
@@ -121,7 +121,7 @@ describe EndpointDiagnoses::Create, type: :operation do
         attempt(response_status: 502)
         allow(diagnoser).to receive(:call).and_return(
           Ai::Diagnosis::Result.new(
-            label: Ai::Diagnosis::RECEIVER_SERVER_ERROR,
+            label: Ai::Diagnosis::UNKNOWN,
             suggested_action: 'Check the receiver 5xx logs and recover the endpoint.',
             source: Ai::Diagnosis::SOURCE_AI,
             model: 'gemini-test-model'
@@ -131,7 +131,7 @@ describe EndpointDiagnoses::Create, type: :operation do
         diagnosis = diagnose
 
         expect(diagnosis).to have_attributes(
-          label: Ai::Diagnosis::RECEIVER_SERVER_ERROR,
+          label: Ai::Diagnosis::UNKNOWN,
           source: EndpointDiagnosis::SOURCE_AI,
           model: 'gemini-test-model'
         )
