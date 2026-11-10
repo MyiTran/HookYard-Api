@@ -39,9 +39,14 @@ class EndpointDiagnosis < ApplicationRecord
   belongs_to :project
   belongs_to :requested_by, class_name: 'User'
 
+  scope :newest_first, -> { order(created_at: :desc) }
+
   validates :label, inclusion: { in: Ai::Diagnosis::LABELS }
   validates :suggested_action, presence: true, length: { maximum: Ai::Diagnosis::ACTION_MAX_LENGTH }
-  validates :analyzed_attempt_count, numericality: { only_integer: true, greater_than_or_equal_to: 0 }
+  validates :source, presence: true
+  validates :analyzed_attempt_count,
+            presence: true,
+            numericality: { only_integer: true, greater_than_or_equal_to: 0 }
   validate :endpoint_belongs_to_project
 
   private

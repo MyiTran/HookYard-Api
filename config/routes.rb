@@ -59,7 +59,9 @@ Rails.application.routes.draw do
               post :re_enable
             end
             resources :messages, only: %i[index]
-            resources :diagnoses, only: %i[create], controller: 'endpoint_diagnoses'
+            resources :diagnoses, only: %i[create], controller: 'endpoint_diagnoses' do
+              get :latest, on: :collection
+            end
           end
           resources :messages, only: %i[show]
           resources :ingest_rejections, only: %i[index]

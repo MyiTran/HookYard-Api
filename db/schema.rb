@@ -147,9 +147,6 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_05_120000) do
     t.index ["project_id", "created_at"], name: "index_endpoint_diagnoses_on_project_id_and_created_at"
     t.index ["project_id"], name: "index_endpoint_diagnoses_on_project_id"
     t.index ["requested_by_id"], name: "index_endpoint_diagnoses_on_requested_by_id"
-    t.check_constraint "analyzed_attempt_count >= 0", name: "endpoint_diagnoses_attempt_count_non_negative"
-    t.check_constraint "label::text = ANY (ARRAY['signature_mismatch'::character varying, 'auth_expired'::character varying, 'endpoint_moved'::character varying, 'handler_timeout'::character varying, 'payload_rejected'::character varying, 'rate_limited'::character varying, 'tls_failure'::character varying, 'endpoint_gone'::character varying, 'unknown'::character varying]::text[])", name: "endpoint_diagnoses_label_valid"
-    t.check_constraint "source::text = ANY (ARRAY['ai'::character varying, 'fallback'::character varying]::text[])", name: "endpoint_diagnoses_source_valid"
   end
 
   create_table "endpoint_signing_secrets", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|

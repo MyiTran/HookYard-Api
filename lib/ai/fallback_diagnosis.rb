@@ -4,6 +4,7 @@ module Ai
   # the diagnosis endpoint.
   module FallbackDiagnosis
     AUTH_EXPIRED_STATUSES = [401, 403].freeze
+    RECEIVER_SERVER_ERROR_STATUSES = (500..599)
     ENDPOINT_GONE_STATUS = 410
 
     ACTIONS = {
@@ -11,6 +12,8 @@ module Ai
       Diagnosis::HANDLER_TIMEOUT =>
         'Increase the receiver response time or investigate why the handler exceeds the delivery timeout.',
       Diagnosis::ENDPOINT_GONE => 'Update the endpoint URL to an active receiver, then retry delivery.',
+      Diagnosis::RECEIVER_SERVER_ERROR =>
+        'Inspect the receiver server logs, recover the endpoint, then retry delivery.',
       Diagnosis::UNKNOWN => 'Review the latest delivery attempt and receiver logs, then correct the endpoint before retrying.'
     }.freeze
 
@@ -30,6 +33,7 @@ module Ai
     def label_for(attempt)
       return Diagnosis::UNKNOWN if attempt.nil?
       return Diagnosis::AUTH_EXPIRED if AUTH_EXPIRED_STATUSES.include?(attempt.response_status)
+      return Diagnosis::RECEIVER_SERVER_ERROR if RECEIVER_SERVER_ERROR_STATUSES.cover?(attempt.response_status)
       return Diagnosis::HANDLER_TIMEOUT if transport_timeout?(attempt)
       return Diagnosis::ENDPOINT_GONE if attempt.response_status == ENDPOINT_GONE_STATUS
 

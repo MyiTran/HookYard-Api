@@ -12,6 +12,15 @@ module Api
           render_resource(diagnosis, serializer: EndpointDiagnosisSerializer, status: :created)
         end
 
+        def latest
+          authorize EndpointDiagnosis.new(endpoint: @endpoint, project: @project), :show?
+
+          diagnosis = @endpoint.endpoint_diagnoses.newest_first.first
+          return head :no_content if diagnosis.nil?
+
+          render_resource(diagnosis, serializer: EndpointDiagnosisSerializer)
+        end
+
         private
 
         def set_project

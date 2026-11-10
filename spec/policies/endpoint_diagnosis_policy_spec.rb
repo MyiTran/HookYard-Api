@@ -37,4 +37,30 @@ describe EndpointDiagnosisPolicy, type: :policy do
       end
     end
   end
+
+  describe '#show?' do
+    context 'when the user is a project member' do
+      let(:user) { maintainer }
+
+      it 'is allowed' do
+        expect(subject.show?).to be(true)
+      end
+    end
+
+    context 'when the user is the project owner' do
+      let(:user) { owner }
+
+      it 'is allowed' do
+        expect(subject.show?).to be(true)
+      end
+    end
+
+    context 'when the user is not a project member' do
+      let(:user) { outsider }
+
+      it 'is denied' do
+        expect(subject.show?).to be(false)
+      end
+    end
+  end
 end

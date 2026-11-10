@@ -38,9 +38,35 @@ describe EndpointDiagnosis, type: :model do
       end
     end
 
+    context 'when the analyzed attempt count is missing' do
+      it 'is invalid' do
+        diagnosis.analyzed_attempt_count = nil
+
+        expect(diagnosis).not_to be_valid
+        expect(diagnosis.errors[:analyzed_attempt_count]).to be_present
+      end
+    end
+
+    context 'when the analyzed attempt count is not a whole number' do
+      it 'is invalid' do
+        diagnosis.analyzed_attempt_count = 1.5
+
+        expect(diagnosis).not_to be_valid
+      end
+    end
+
     context 'when the source is not a known source' do
       it 'is invalid' do
         diagnosis.source = 'manual'
+
+        expect(diagnosis).not_to be_valid
+        expect(diagnosis.errors[:source]).to be_present
+      end
+    end
+
+    context 'when the source is missing' do
+      it 'is invalid' do
+        diagnosis.source = nil
 
         expect(diagnosis).not_to be_valid
         expect(diagnosis.errors[:source]).to be_present
@@ -53,6 +79,24 @@ describe EndpointDiagnosis, type: :model do
 
         expect(diagnosis).not_to be_valid
       end
+    end
+  end
+
+  describe '.newest_first' do
+    it 'orders the diagnoses from the most recent to the oldest' do
+      stale = create(:endpoint_diagnosis, created_at: 2.hours.ago)
+      newest = create(:endpoint_diagnosis, created_at: 1.hour.ago)
+
+      expect(described_class.newest_first.to_a).to eq([newest, stale])
+    end
+  end
+
+  describe 'invalid labels' do
+    it 'never persists a label outside the allowed labels' do
+      diagnosis.label = 'cosmic_rays'
+
+      expect { diagnosis.save! }.to raise_error(ActiveRecord::RecordInvalid)
+      expect(described_class.where(label: 'cosmic_rays')).to be_empty
     end
   end
 

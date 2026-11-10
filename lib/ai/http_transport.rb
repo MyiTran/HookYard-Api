@@ -8,18 +8,39 @@ module Ai
   class HttpTransport
     Result = Struct.new(:status, :body, keyword_init: true)
 
+    # Raised while streaming, so an oversized provider answer is never buffered in
+    # full: the caller treats it as a failed AI answer and records the fallback.
+    class ResponseTooLargeError < StandardError; end
+
     MAX_RESPONSE_BYTES = 32_768
 
     def post_json(url:, headers:, body:, open_timeout:, read_timeout:)
       uri = URI.parse(url)
       raise ArgumentError, 'AI provider requests must use https' unless uri.scheme == 'https'
 
-      response = build_http(uri, open_timeout, read_timeout).request(build_request(uri, headers, body))
+      status = nil
+      payload = nil
 
-      Result.new(status: response.code.to_i, body: response.body.to_s.byteslice(0, MAX_RESPONSE_BYTES))
+      build_http(uri, open_timeout, read_timeout).request(build_request(uri, headers, body)) do |response|
+        status = response.code.to_i
+        payload = read_bounded_body(response)
+      end
+
+      Result.new(status: status, body: payload.force_encoding(Encoding::UTF_8))
     end
 
     private
+
+    def read_bounded_body(response)
+      body = String.new(capacity: MAX_RESPONSE_BYTES, encoding: Encoding::BINARY)
+
+      response.read_body do |chunk|
+        body << chunk.to_s.b
+        raise ResponseTooLargeError, 'AI provider response exceeded the read limit' if body.bytesize > MAX_RESPONSE_BYTES
+      end
+
+      body
+    end
 
     def build_http(uri, open_timeout, read_timeout)
       http = Net::HTTP.new(uri.host, uri.port)

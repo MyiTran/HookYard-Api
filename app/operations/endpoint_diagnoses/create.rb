@@ -15,7 +15,7 @@ module EndpointDiagnoses
         suggested_action: result.suggested_action,
         source: result.source,
         model: result.model,
-        analyzed_attempt_count: attempts.size
+        analyzed_attempt_count: diagnoser.analyzed_attempt_count
       )
     end
 
@@ -25,7 +25,7 @@ module EndpointDiagnoses
 
     def recent_attempts(endpoint)
       endpoint.delivery_attempts
-              .finished_for_diagnosis
+              .failed_for_diagnosis
               .newest_first
               .limit(Ai::AttemptContext.attempt_limit)
               .to_a

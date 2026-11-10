@@ -39,8 +39,21 @@ describe Ai::FallbackDiagnosis do
       )
     end
 
+    it 'marks a receiver server error as receiver_server_error' do
+      [500, 502, 503, 504].each do |status|
+        result = described_class.for(attempt_for(response_status: status))
+
+        expect(result).to have_attributes(
+          label: Ai::Diagnosis::RECEIVER_SERVER_ERROR,
+          suggested_action: 'Inspect the receiver server logs, recover the endpoint, then retry delivery.',
+          source: Ai::Diagnosis::SOURCE_FALLBACK,
+          model: nil
+        )
+      end
+    end
+
     it 'falls back to unknown for any other failure' do
-      result = described_class.for(attempt_for(response_status: 500))
+      result = described_class.for(attempt_for(response_status: 302))
 
       expect(result).to have_attributes(
         label: Ai::Diagnosis::UNKNOWN,
@@ -59,7 +72,7 @@ describe Ai::FallbackDiagnosis do
     it 'treats a resolved HTTP error as a receiver failure, not a transport timeout' do
       attempt = attempt_for(response_status: 504, error_type: nil)
 
-      expect(described_class.for(attempt).label).to eq(Ai::Diagnosis::UNKNOWN)
+      expect(described_class.for(attempt).label).to eq(Ai::Diagnosis::RECEIVER_SERVER_ERROR)
     end
   end
 end
