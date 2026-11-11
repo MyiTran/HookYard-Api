@@ -9,6 +9,7 @@
 #  error_message          :text
 #  error_type             :string
 #  http_method            :string           default("POST"), not null
+#  metrics_recorded_at    :datetime
 #  request_body           :text
 #  request_headers        :jsonb            not null
 #  request_url            :text             not null

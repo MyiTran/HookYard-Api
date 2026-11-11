@@ -206,6 +206,18 @@ describe Messages::Deliver, type: :operation do
       expect(message.delivery_lease_expires_at).to be_nil
     end
 
+    it 'does not drive the endpoint queue counter negative when a queued message has no signing secret' do
+      endpoint.endpoint_signing_secrets.destroy_all
+      message.update_columns(queued_at: Time.current)
+      endpoint.update_columns(queued_message_count: 0)
+
+      deliver(http_result(status: 200))
+
+      expect(message.reload.status).to eq('failed')
+      expect(message.queued_at).to be_nil
+      expect(endpoint.reload.queued_message_count).to be >= 0
+    end
+
     it 'terminally fails when signing raises instead of retrying' do
       failing_signer = double('signer')
       allow(failing_signer).to receive(:sign).and_raise(StandardError, 'bad key')

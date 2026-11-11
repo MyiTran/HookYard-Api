@@ -40,8 +40,15 @@ describe CircuitProbes::Run, type: :operation do
 
   def enqueued_delivery_ids
     ActiveJob::Base.queue_adapter.enqueued_jobs
-                       .select { |job| job[:job] == Messages::DeliverJob }
-                       .map { |job| job[:args].first }
+                        .select { |job| job[:job] == Messages::DeliverJob }
+                        .map { |job| job[:args].first }
+  end
+
+  def run_due_probe(target_endpoint = endpoint)
+    target_endpoint.update!(circuit_probe_lease_expires_at: now + Webhooks::DeliveryPolicy.delivery_lease_duration)
+    reservation_token = target_endpoint.reload.circuit_probe_lease_expires_at.utc.iso8601(6)
+
+    operation.call(endpoint: target_endpoint, reservation_token: reservation_token)
   end
 
   describe '.call' do
@@ -55,7 +62,7 @@ describe CircuitProbes::Run, type: :operation do
           http_result
         end
 
-        expect { operation.call(endpoint: endpoint) }.not_to change(Event, :count)
+        expect { run_due_probe }.not_to change(Event, :count)
         expect(Message.count).to eq(0)
 
         payload = Oj.load(captured[:body])
@@ -77,7 +84,7 @@ describe CircuitProbes::Run, type: :operation do
           http_result
         end
 
-        operation.call(endpoint: endpoint)
+        run_due_probe
 
         verified = signer.verify(
           secret: endpoint.current_signing_secret.secret,
@@ -94,7 +101,7 @@ describe CircuitProbes::Run, type: :operation do
         message = held_message
         allow(http_client).to receive(:post).and_return(http_result(status: 200))
 
-        expect { operation.call(endpoint: endpoint) }.to change(CircuitProbe, :count).by(1)
+        expect { run_due_probe }.to change(CircuitProbe, :count).by(1)
 
         expect(Message.count).to eq(1)
         expect(DeliveryAttempt.count).to eq(0)
@@ -115,7 +122,7 @@ describe CircuitProbes::Run, type: :operation do
           http_result(status: 500, headers: { 'set-cookie' => 'session=1', 'x-trace' => 'abc' }, body: "bad\xFF".b)
         )
 
-        operation.call(endpoint: endpoint)
+        run_due_probe
 
         probe = endpoint.reload.last_circuit_probe
         expect(probe.response_headers).to eq('x-trace' => 'abc')
@@ -127,7 +134,7 @@ describe CircuitProbes::Run, type: :operation do
           http_result(status: nil, body: nil, error: 'execution expired', error_type: 'Net::ReadTimeout')
         )
 
-        operation.call(endpoint: endpoint)
+        run_due_probe
 
         probe = endpoint.reload.last_circuit_probe
         expect(probe).to be_failed
@@ -141,7 +148,7 @@ describe CircuitProbes::Run, type: :operation do
         second = held_message(created_at: now + 1.minute)
         allow(http_client).to receive(:post).and_return(http_result(status: 200))
 
-        operation.call(endpoint: endpoint)
+        run_due_probe
 
         endpoint.reload
         expect(endpoint).to be_enabled
@@ -160,7 +167,7 @@ describe CircuitProbes::Run, type: :operation do
         messages = Array.new(5) { held_message }
         allow(http_client).to receive(:post).and_return(http_result(status: 200))
 
-        operation.call(endpoint: endpoint)
+        run_due_probe
 
         expect(messages.map { |message| message.reload.held_at }).to all(be_nil)
         expect(enqueued_delivery_ids).to match_array(messages.map(&:id))
@@ -171,7 +178,7 @@ describe CircuitProbes::Run, type: :operation do
         stranded.update_columns(held_at: nil, hold_reason: nil, next_retry_at: now + 5.hours)
         allow(http_client).to receive(:post).and_return(http_result(status: 200))
 
-        operation.call(endpoint: endpoint)
+        run_due_probe
 
         stranded.reload
         expect(stranded.status).to eq('pending')
@@ -185,7 +192,7 @@ describe CircuitProbes::Run, type: :operation do
         held_message(created_at: now + 1.minute)
         allow(http_client).to receive(:post).and_return(http_result(status: 200))
 
-        operation.call(endpoint: endpoint)
+        run_due_probe
 
         endpoint.reload
         expect(endpoint).to be_enabled
@@ -198,7 +205,7 @@ describe CircuitProbes::Run, type: :operation do
         message = held_message
         allow(http_client).to receive(:post).and_return(http_result(status: 503))
 
-        operation.call(endpoint: endpoint)
+        run_due_probe
 
         endpoint.reload
         expect(endpoint).to be_circuit_open
@@ -214,7 +221,7 @@ describe CircuitProbes::Run, type: :operation do
       it 'does not count a client error towards the failure streak' do
         allow(http_client).to receive(:post).and_return(http_result(status: 400))
 
-        expect { operation.call(endpoint: endpoint) }
+        expect { run_due_probe }
           .not_to(change { endpoint.reload.circuit_failure_count })
         expect(endpoint.reload).to be_circuit_open
       end
@@ -224,7 +231,7 @@ describe CircuitProbes::Run, type: :operation do
         message = held_message
         allow(http_client).to receive(:post).and_return(http_result(status: 500))
 
-        operation.call(endpoint: endpoint)
+        run_due_probe
 
         endpoint.reload
         expect(endpoint).to be_disabled
@@ -239,7 +246,7 @@ describe CircuitProbes::Run, type: :operation do
         open_circuit(disable_at: now - 1.second)
         allow(http_client).to receive(:post).and_return(http_result(status: 503))
 
-        operation.call(endpoint: endpoint)
+        run_due_probe
 
         expect(endpoint.reload).to be_disabled
         expect(Message.count).to eq(0)
@@ -248,7 +255,7 @@ describe CircuitProbes::Run, type: :operation do
       it 'closes the circuit for an endpoint that never delivered a message' do
         allow(http_client).to receive(:post).and_return(http_result(status: 204))
 
-        operation.call(endpoint: endpoint)
+        run_due_probe
 
         expect(endpoint.reload).to be_enabled
         expect(Message.count).to eq(0)
@@ -265,7 +272,7 @@ describe CircuitProbes::Run, type: :operation do
       it 'records a failed probe instead of sending an unsigned probe' do
         allow(http_client).to receive(:post)
 
-        operation.call(endpoint: endpoint)
+        run_due_probe
 
         expect(http_client).not_to have_received(:post)
         probe = endpoint.reload.last_circuit_probe
@@ -328,11 +335,63 @@ describe CircuitProbes::Run, type: :operation do
           http_result(status: 503)
         end
 
-        operation.call(endpoint: endpoint)
+        run_due_probe
 
         expect(http_client).to have_received(:post).once
         expect(endpoint.circuit_probes.count).to eq(1)
         expect(endpoint.reload.circuit_probe_lease_expires_at).to be_nil
+      end
+    end
+
+    context 'when the job does not own the reservation' do
+      it 'skips legacy queued jobs without a reservation token' do
+        open_circuit
+        allow(http_client).to receive(:post)
+
+        operation.call(endpoint: endpoint)
+
+        expect(http_client).not_to have_received(:post)
+        expect(endpoint.circuit_probes).to be_empty
+        expect(endpoint.reload).to be_circuit_open
+      end
+
+      it 'skips a duplicate owner job after the first probe already finalized' do
+        open_circuit
+        endpoint.update!(circuit_probe_lease_expires_at: now + Webhooks::DeliveryPolicy.delivery_lease_duration)
+        token = endpoint.reload.circuit_probe_lease_expires_at.utc.iso8601(6)
+        allow(http_client).to receive(:post).and_return(http_result(status: 200))
+
+        operation.call(endpoint: endpoint, reservation_token: token)
+        operation.call(endpoint: endpoint, reservation_token: token)
+
+        expect(http_client).to have_received(:post).once
+        expect(endpoint.circuit_probes.count).to eq(1)
+        expect(endpoint.reload).to be_enabled
+      end
+
+      it 'skips a job whose reservation token does not match the active lease' do
+        open_circuit
+        endpoint.update!(circuit_probe_lease_expires_at: now + 60.seconds)
+        allow(http_client).to receive(:post)
+
+        operation.call(endpoint: endpoint, reservation_token: '2020-01-01T00:00:00.000000Z')
+
+        expect(http_client).not_to have_received(:post)
+        expect(endpoint.circuit_probes).to be_empty
+        expect(endpoint.reload.circuit_probe_lease_expires_at).to eq(now + 60.seconds)
+      end
+
+      it 'skips a job whose reservation already expired' do
+        open_circuit
+        endpoint.update!(circuit_probe_lease_expires_at: now - 1.second)
+        stale_token = endpoint.reload.circuit_probe_lease_expires_at.utc.iso8601(6)
+        allow(http_client).to receive(:post)
+
+        operation.call(endpoint: endpoint, reservation_token: stale_token)
+
+        expect(http_client).not_to have_received(:post)
+        expect(endpoint.circuit_probes).to be_empty
+        expect(endpoint.reload.circuit_probe_lease_expires_at).to eq(now - 1.second)
       end
     end
 
@@ -351,7 +410,7 @@ describe CircuitProbes::Run, type: :operation do
         endpoint.update!(circuit_probe_lease_expires_at: now - 1.minute)
         allow(http_client).to receive(:post).and_return(http_result(status: 200))
 
-        operation.call(endpoint: endpoint)
+        run_due_probe
 
         stale.reload
         expect(stale).to be_failed
@@ -375,7 +434,7 @@ describe CircuitProbes::Run, type: :operation do
           http_result(status: 500)
         end
 
-        operation.call(endpoint: endpoint)
+        run_due_probe
 
         endpoint.reload
         expect(endpoint).to be_circuit_open

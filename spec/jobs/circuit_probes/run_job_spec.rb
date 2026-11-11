@@ -8,13 +8,23 @@ describe CircuitProbes::RunJob, type: :job do
   end
 
   describe '#perform' do
-    it 'runs the synthetic probe for the endpoint' do
+    it 'runs the synthetic probe for the endpoint without a legacy reservation token' do
       endpoint = create(:endpoint)
       allow(CircuitProbes::Run).to receive(:call)
 
       described_class.new.perform(endpoint.id)
 
-      expect(CircuitProbes::Run).to have_received(:call).with(endpoint: endpoint)
+      expect(CircuitProbes::Run).to have_received(:call).with(endpoint: endpoint, reservation_token: nil)
+    end
+
+    it 'passes the reservation token from the scheduler to the probe owner' do
+      endpoint = create(:endpoint)
+      token = '2026-01-01T12:05:00.000000Z'
+      allow(CircuitProbes::Run).to receive(:call)
+
+      described_class.new.perform(endpoint.id, token)
+
+      expect(CircuitProbes::Run).to have_received(:call).with(endpoint: endpoint, reservation_token: token)
     end
 
     it 'is discarded when the endpoint no longer exists' do

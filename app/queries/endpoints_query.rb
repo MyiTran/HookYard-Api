@@ -12,6 +12,7 @@ class EndpointsQuery < ApplicationQuery
     scope = filter(scope, :by_search, params[:q])
     scope = filter(scope, :by_project, params[:project_id])
     scope = filter(scope, :by_active, params[:active])
+    scope = filter(scope, :by_circuit_state, params[:circuit_state])
 
     apply_order(scope, params[:order])
   end
@@ -32,6 +33,12 @@ class EndpointsQuery < ApplicationQuery
 
   def by_active(scope, active)
     scope.where(active: ActiveModel::Type::Boolean.new.cast(active))
+  end
+
+  def by_circuit_state(scope, state)
+    return scope unless Endpoint.circuit_states.key?(state.to_s)
+
+    scope.where(circuit_state: state.to_s)
   end
 
   def apply_order(scope, value)

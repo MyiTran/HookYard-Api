@@ -5,8 +5,8 @@ module CircuitProbes
 
     discard_on ActiveRecord::RecordNotFound
 
-    def perform(endpoint_id)
-      CircuitProbes::Run.call(endpoint: Endpoint.find(endpoint_id))
+    def perform(endpoint_id, reservation_token = nil)
+      CircuitProbes::Run.call(endpoint: Endpoint.find(endpoint_id), reservation_token: reservation_token)
     end
   end
 end

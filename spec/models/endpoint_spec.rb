@@ -388,6 +388,87 @@ describe Endpoint, type: :model do
     end
   end
 
+  describe '#reserve_probe_lease!' do
+    let(:now) { Time.zone.local(2026, 1, 1, 12, 0, 0) }
+
+    before { travel_to(now) }
+
+    def open_due_circuit(target_endpoint)
+      target_endpoint.update!(
+        circuit_state: 'circuit_open',
+        circuit_failure_count: Webhooks::CircuitPolicy::FAILURE_THRESHOLD,
+        circuit_opened_at: now,
+        circuit_disable_at: now + Webhooks::CircuitPolicy.disable_window,
+        circuit_next_probe_at: now
+      )
+    end
+
+    it 'atomically reserves a lease for a due circuit' do
+      endpoint = create(:endpoint)
+      open_due_circuit(endpoint)
+
+      expect(endpoint.reload.reserve_probe_lease!(at: now)).to be(true)
+      expect(endpoint.reload.circuit_probe_lease_expires_at).to eq(now + Webhooks::DeliveryPolicy.delivery_lease_duration)
+    end
+
+    it 'does not reserve the same endpoint twice' do
+      endpoint = create(:endpoint)
+      open_due_circuit(endpoint)
+
+      expect(endpoint.reload.reserve_probe_lease!(at: now)).to be(true)
+      expect(endpoint.reload.reserve_probe_lease!(at: now)).to be(false)
+    end
+
+    it 'does not reserve an endpoint that is not due or has an active lease' do
+      not_due = create(:endpoint)
+      open_due_circuit(not_due)
+      not_due.update!(circuit_next_probe_at: now + 1.minute)
+
+      leased = create(:endpoint)
+      open_due_circuit(leased)
+      leased.update!(circuit_probe_lease_expires_at: now + 30.seconds)
+
+      expect(not_due.reload.reserve_probe_lease!(at: now)).to be(false)
+      expect(leased.reload.reserve_probe_lease!(at: now)).to be(false)
+    end
+  end
+
+  describe '#release_probe_reservation!' do
+    let(:now) { Time.zone.local(2026, 1, 1, 12, 0, 0) }
+
+    before { travel_to(now) }
+
+    def reserved_endpoint(lease_expires_at:)
+      endpoint = create(:endpoint)
+      endpoint.update!(
+        circuit_state: 'circuit_open',
+        circuit_failure_count: Webhooks::CircuitPolicy::FAILURE_THRESHOLD,
+        circuit_opened_at: now,
+        circuit_disable_at: now + Webhooks::CircuitPolicy.disable_window,
+        circuit_next_probe_at: now,
+        circuit_probe_lease_expires_at: lease_expires_at
+      )
+      endpoint.reload
+    end
+
+    it 'releases only the matching reservation' do
+      lease_expires_at = now + Webhooks::DeliveryPolicy.delivery_lease_duration
+      endpoint = reserved_endpoint(lease_expires_at: lease_expires_at)
+      token = lease_expires_at.utc.iso8601(6)
+
+      expect(endpoint.release_probe_reservation!(token)).to be(true)
+      expect(endpoint.reload.circuit_probe_lease_expires_at).to be_nil
+    end
+
+    it 'preserves a newer reservation when releasing a stale token' do
+      newer_lease = now + 2.minutes
+      endpoint = reserved_endpoint(lease_expires_at: newer_lease)
+
+      expect(endpoint.release_probe_reservation!('2020-01-01T00:00:00.000000Z')).to be(false)
+      expect(endpoint.reload.circuit_probe_lease_expires_at).to eq(newer_lease)
+    end
+  end
+
   describe '#probe_due?' do
     it 'is due only for an open circuit whose next probe time has passed' do
       endpoint = create(:endpoint)

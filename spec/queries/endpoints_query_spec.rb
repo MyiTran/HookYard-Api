@@ -68,6 +68,18 @@ describe EndpointsQuery do
     end
   end
 
+  describe 'circuit state filter' do
+    it 'returns only endpoints in the requested circuit state' do
+      owned_endpoint.update_columns(circuit_state: 'circuit_open')
+
+      expect(run(circuit_state: 'circuit_open')).to contain_exactly(owned_endpoint)
+    end
+
+    it 'ignores an unsupported circuit state' do
+      expect(run(circuit_state: 'melted')).to contain_exactly(owned_endpoint, maintained_endpoint)
+    end
+  end
+
   describe 'archive filter' do
     it 'returns only archived endpoints when archived is true' do
       expect(run(archived: 'true')).to contain_exactly(archived_endpoint)

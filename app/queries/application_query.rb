@@ -66,6 +66,8 @@ class ApplicationQuery
   end
 
   def parsed_time(value)
+    return value if value.is_a?(Time)
+
     Time.zone.parse(value.to_s)
   rescue ArgumentError
     nil

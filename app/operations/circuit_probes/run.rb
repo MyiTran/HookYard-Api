@@ -17,9 +17,9 @@ module CircuitProbes
       @signer = signer
     end
 
-    def call(endpoint:)
+    def call(endpoint:, reservation_token: nil)
       @endpoint = endpoint
-      claim = claim_probe
+      claim = claim_probe(reservation_token)
 
       return endpoint.reload unless claim.claimed?
 
@@ -38,24 +38,32 @@ module CircuitProbes
 
     attr_reader :http_client, :signer, :endpoint
 
-    def claim_probe
+    def claim_probe(reservation_token)
       endpoint.with_lock do
         endpoint.reload
         return Claim.new(outcome: :skipped) unless endpoint.probe_due?(now)
-        return Claim.new(outcome: :skipped) if endpoint.probe_in_flight?(now)
+        return Claim.new(outcome: :skipped) unless owns_reservation?(reservation_token)
 
         secret = EndpointSigningSecret.current.find_by(endpoint_id: endpoint.id)
 
         if secret.nil?
           record_missing_secret
+          endpoint.release_probe_lease!
+          endpoint.schedule_next_probe!
           return Claim.new(outcome: :skipped)
         end
 
         expire_abandoned_probe
-        endpoint.acquire_probe_lease!(at: now)
 
         build_claim(secret)
       end
+    end
+
+    def owns_reservation?(reservation_token)
+      return false if reservation_token.blank?
+      return false unless endpoint.probe_in_flight?(now)
+
+      endpoint.circuit_probe_lease_expires_at.utc.iso8601(6) == reservation_token
     end
 
     def build_claim(secret)
@@ -141,7 +149,6 @@ module CircuitProbes
         error_type: MISSING_SECRET_ERROR_TYPE,
         error_message: MISSING_SECRET_MESSAGE
       )
-      endpoint.schedule_next_probe!
     end
 
     def expire_abandoned_probe

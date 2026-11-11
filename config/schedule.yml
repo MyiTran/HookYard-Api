@@ -2,23 +2,28 @@ purge_anattached_blobs_job:
   cron: '0 0 * * *'
   class: 'ActiveStorage::PurgeUnattachedBlobsJob'
   queue: default
+  active_job: true
 
 purge_expired_jwts_job:
   cron: '0 0 * * *'
   class: 'DeviseJwt::PurgeExpiredJwtsJob'
   queue: default
+  active_job: true
 
 webhook_delivery_retry_sweep:
   cron: '* * * * *'
   class: 'Messages::RetrySweepJob'
   queue: default
+  active_job: true
 
 recover_pending_webhook_deliveries:
   cron: '* * * * *'
   class: 'Messages::PendingDeliveryRecoveryJob'
   queue: default
+  active_job: true
 
 purge_delivery_attempt_bodies:
   cron: '30 2 * * *'
   class: 'DeliveryAttempts::PurgeBodiesJob'
   queue: low
+  active_job: true

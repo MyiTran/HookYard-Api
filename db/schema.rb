@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_11_05_120000) do
+ActiveRecord::Schema[8.0].define(version: 2026_11_10_100003) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -50,18 +50,6 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_05_120000) do
     t.uuid "user_id", null: false
     t.index ["jti"], name: "index_allowlisted_jwts_on_jti", unique: true
     t.index ["user_id"], name: "index_allowlisted_jwts_on_user_id"
-  end
-
-  create_table "api_credentials", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
-    t.uuid "project_id", null: false
-    t.string "name", null: false
-    t.string "token_prefix", null: false
-    t.string "token_digest", null: false
-    t.datetime "revoked_at"
-    t.datetime "created_at", null: false
-    t.datetime "updated_at", null: false
-    t.index ["project_id"], name: "index_api_credentials_on_project_id"
-    t.index ["token_digest"], name: "index_api_credentials_on_token_digest", unique: true
   end
 
   create_table "cable_tickets", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -121,6 +109,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_05_120000) do
     t.datetime "updated_at", null: false
     t.datetime "bodies_purged_at"
     t.uuid "replay_item_id"
+    t.datetime "metrics_recorded_at"
     t.index ["created_at"], name: "index_delivery_attempts_on_bodies_pending_purge", where: "((bodies_purged_at IS NULL) AND ((response_status IS NOT NULL) OR (error_type IS NOT NULL)))"
     t.index ["message_id", "attempt_number"], name: "index_delivery_attempts_on_message_id_and_attempt_number", unique: true
     t.index ["message_id", "created_at"], name: "index_delivery_attempts_on_message_id_and_created_at"
@@ -129,6 +118,21 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_05_120000) do
     t.index ["request_id"], name: "index_delivery_attempts_on_request_id"
     t.check_constraint "response_status IS NULL OR response_status >= 100 AND response_status <= 599", name: "delivery_attempts_response_status_range"
     t.check_constraint "signing_secret_version > 0", name: "delivery_attempts_signing_secret_version_positive"
+  end
+
+  create_table "delivery_metrics", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "project_id", null: false
+    t.date "day", null: false
+    t.integer "attempts_count", default: 0, null: false
+    t.integer "successes_count", default: 0, null: false
+    t.integer "failures_count", default: 0, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["project_id", "day"], name: "index_delivery_metrics_on_project_id_and_day", unique: true
+    t.index ["project_id"], name: "index_delivery_metrics_on_project_id"
+    t.check_constraint "attempts_count >= 0", name: "delivery_metrics_attempts_count_non_negative"
+    t.check_constraint "failures_count >= 0", name: "delivery_metrics_failures_count_non_negative"
+    t.check_constraint "successes_count >= 0", name: "delivery_metrics_successes_count_non_negative"
   end
 
   create_table "endpoint_diagnoses", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -416,11 +420,11 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_05_120000) do
   add_foreign_key "active_storage_attachments", "active_storage_blobs", column: "blob_id"
   add_foreign_key "active_storage_variant_records", "active_storage_blobs", column: "blob_id"
   add_foreign_key "allowlisted_jwts", "users", on_delete: :cascade
-  add_foreign_key "api_credentials", "projects", on_delete: :cascade
   add_foreign_key "cable_tickets", "users", on_delete: :cascade
   add_foreign_key "circuit_probes", "endpoints", on_delete: :cascade
   add_foreign_key "delivery_attempts", "messages", on_delete: :cascade
   add_foreign_key "delivery_attempts", "replay_items", on_delete: :nullify
+  add_foreign_key "delivery_metrics", "projects", on_delete: :cascade
   add_foreign_key "endpoint_diagnoses", "endpoints", on_delete: :cascade
   add_foreign_key "endpoint_diagnoses", "projects", on_delete: :cascade
   add_foreign_key "endpoint_diagnoses", "users", column: "requested_by_id"

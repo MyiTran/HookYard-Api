@@ -3,15 +3,7 @@ module Api
     module Admin
       class DashboardsController < BaseController
         def show
-          project_count = defined?(Project) ? Project.count : 0
-
-          render json: {
-            message: 'Welcome to Admin Dashboard',
-            stats: {
-              total_users: User.count,
-              total_projects: project_count
-            }
-          }
+          render_resource(::Admin::OverviewQuery.call, serializer: ::Admin::OverviewSerializer)
         end
       end
     end
