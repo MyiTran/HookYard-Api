@@ -95,6 +95,17 @@ describe Users::ChangePlan, type: :operation do
       end
     end
 
+    context 'when the target account is a system admin' do
+      let(:account) { create(:user).tap { |user| user.add_role(:admin) } }
+
+      it 'rejects the change and keeps the previous plan' do
+        expect { described_class.call(user: account, plan: User::PRO_PLAN) }
+          .to raise_error(ApiError::UnprocessableEntityError)
+
+        expect(account.reload.plan).to eq(User::FREE_PLAN)
+      end
+    end
+
     context 'when the plan is unknown' do
       it 'rejects the change and keeps the previous plan' do
         expect { described_class.call(user: account, plan: 'enterprise') }

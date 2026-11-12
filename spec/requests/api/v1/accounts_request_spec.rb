@@ -164,6 +164,15 @@ describe 'Accounts', type: :request do
       expect(other_account.reload.plan).to eq(User::FREE_PLAN)
     end
 
+    it 'rejects an admin account from changing its own plan' do
+      account.add_role(:admin)
+
+      patch '/api/v1/account/plan', params: { account: { plan: User::PRO_PLAN } }, headers: auth_headers(account), as: :json
+
+      expect(response).to have_http_status(:unprocessable_entity)
+      expect(account.reload.plan).to eq(User::FREE_PLAN)
+    end
+
     it 'rejects an unknown plan' do
       patch '/api/v1/account/plan', params: { account: { plan: 'enterprise' } }, headers: auth_headers(account), as: :json
 
