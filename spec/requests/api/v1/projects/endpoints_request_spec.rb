@@ -348,10 +348,15 @@ describe 'Projects::Endpoints', type: :request do
 
       expect(response).to have_http_status(:payment_required)
       body = JSON.parse(response.body)
+      expect(body.keys).to contain_exactly('error', 'message', 'status', 'used', 'limit', 'errors')
       expect(body['error']).to eq('plan_limit_exceeded')
+      expect(body['message']).to eq('The free plan allows at most 3 endpoints per project')
+      expect(body['status']).to eq(402)
       expect(body['used']).to eq(Plans::Entitlements.endpoint_limit(owner))
       expect(body['limit']).to eq(Plans::Entitlements.endpoint_limit(owner))
-      expect(body['errors']).to contain_exactly(hash_including('field' => 'endpoint_limit'))
+      expect(body['errors']).to contain_exactly(
+        hash_including('field' => 'endpoint_limit', 'message' => 'The free plan allows at most 3 endpoints per project')
+      )
       expect(project.endpoints.not_archived.count).to eq(Plans::Entitlements.endpoint_limit(owner))
     end
 

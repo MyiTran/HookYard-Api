@@ -201,13 +201,19 @@ describe 'Events', type: :request do
         expect(response).to have_http_status(:payment_required)
         limit = Plans::Entitlements.monthly_delivery_limit(project.billing_owner)
         body = JSON.parse(response.body)
+        expect(body.keys).to contain_exactly('error', 'message', 'status', 'used', 'limit', 'period_ends', 'errors')
         expect(body['error']).to eq('plan_limit_exceeded')
         expect(body['message']).to eq("The #{project.plan} plan allows at most #{limit} deliveries per month")
         expect(body['status']).to eq(402)
         expect(body['used']).to eq(limit)
         expect(body['limit']).to eq(limit)
         expect(body['period_ends']).to eq(UserUsagePeriod.period_ends_at.iso8601)
-        expect(body['errors']).to contain_exactly(hash_including('field' => 'monthly_delivery_limit'))
+        expect(body['errors']).to contain_exactly(
+          hash_including(
+            'field' => 'monthly_delivery_limit',
+            'message' => "The #{project.plan} plan allows at most #{limit} deliveries per month"
+          )
+        )
       end
 
       it 'persists the rejection instead of the event after the transaction rolls back' do

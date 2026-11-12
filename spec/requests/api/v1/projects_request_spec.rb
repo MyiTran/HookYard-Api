@@ -35,10 +35,15 @@ describe 'Projects', type: :request do
 
         expect(response).to have_http_status(:payment_required)
         body = JSON.parse(response.body)
+        expect(body.keys).to contain_exactly('error', 'message', 'status', 'used', 'limit', 'errors')
         expect(body['error']).to eq('plan_limit_exceeded')
+        expect(body['message']).to eq('The free plan allows at most 2 projects')
+        expect(body['status']).to eq(402)
         expect(body['used']).to eq(2)
         expect(body['limit']).to eq(2)
-        expect(body['errors']).to contain_exactly(hash_including('field' => 'project_limit'))
+        expect(body['errors']).to contain_exactly(
+          hash_including('field' => 'project_limit', 'message' => 'The free plan allows at most 2 projects')
+        )
         expect(owner.owned_project_count).to eq(2)
       end
     end
