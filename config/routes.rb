@@ -48,6 +48,7 @@ Rails.application.routes.draw do
           resources :endpoints, only: %i[index show create update destroy] do
             member do
               post :rotate_signing_secret
+              post :re_enable
             end
             resources :messages, only: %i[index]
           end

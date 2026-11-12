@@ -2,7 +2,7 @@ class MessageSerializer < ApplicationSerializer
   identifier :id
 
   fields :webhook_id, :status, :event_id, :created_at, :updated_at
-  fields :attempt_count, :next_retry_at, :terminal_at
+  fields :attempt_count, :next_retry_at, :terminal_at, :delivery_state
 
   field :event_type do |message|
     message.event.event_type
@@ -16,7 +16,11 @@ class MessageSerializer < ApplicationSerializer
     message.retryable?
   end
 
-  fields :last_attempt_at, :last_response_status, :last_duration_ms, :last_error_type
+  field :hold do |message|
+    message.hold_summary
+  end
+
+  fields :last_attempt_at, :last_response_status, :last_duration_ms, :last_error_type, :failure_category
 
   view :with_context do
     field :project do |message|

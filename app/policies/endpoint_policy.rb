@@ -23,6 +23,10 @@ class EndpointPolicy < ApplicationPolicy
     owner? && !record.archived?
   end
 
+  def re_enable?
+    owner? && !record.archived?
+  end
+
   class Scope < ApplicationPolicy::Scope
     def resolve
       user ? scope.where(project: user.projects) : scope.none
