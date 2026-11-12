@@ -1,6 +1,17 @@
 require 'rails_helper'
 
 describe Endpoint, type: :model do
+  def http_result(status:, headers: {}, body: 'response body', error: nil, error_type: nil)
+    Webhooks::HttpClient::Result.new(
+      status: status,
+      headers: headers,
+      body: body,
+      duration_ms: 12,
+      error: error,
+      error_type: error_type
+    )
+  end
+
   describe 'validations' do
     context 'when the name is missing' do
       it 'is invalid' do
@@ -157,6 +168,63 @@ describe Endpoint, type: :model do
       expect(endpoint).not_to be_valid, "expected #{url} to be rejected"
       expect(endpoint.errors[:url]).to be_present
     end
+
+    context 'when the circuit state is unknown' do
+      it 'is invalid' do
+        endpoint = build(:endpoint, circuit_state: 'melted')
+
+        expect(endpoint).not_to be_valid
+        expect(endpoint.errors[:circuit_state]).to be_present
+      end
+    end
+
+    context 'when a circuit state the model knows is set' do
+      it 'stays valid' do
+        described_class.circuit_states.each_key do |state|
+          expect(build(:endpoint, circuit_state: state)).to be_valid, "#{state} must be a valid circuit state"
+        end
+      end
+    end
+
+    context 'when the circuit failure count is negative' do
+      it 'is invalid' do
+        endpoint = build(:endpoint, circuit_failure_count: -1)
+
+        expect(endpoint).not_to be_valid
+        expect(endpoint.errors[:circuit_failure_count]).to be_present
+      end
+    end
+
+    context 'when the queued message count is negative' do
+      it 'is invalid' do
+        endpoint = build(:endpoint, queued_message_count: -1)
+
+        expect(endpoint).not_to be_valid
+        expect(endpoint.errors[:queued_message_count]).to be_present
+      end
+    end
+
+    context 'when both counters are zero' do
+      it 'is valid' do
+        expect(build(:endpoint, circuit_failure_count: 0, queued_message_count: 0)).to be_valid
+      end
+    end
+  end
+
+  describe '#disable_window_elapsed?' do
+    context 'when the deadline was never persisted' do
+      it 'derives it from the open timestamp and the configured window' do
+        opened_at = Time.zone.local(2026, 1, 1, 12, 0, 0)
+        endpoint = create(:endpoint)
+        endpoint.update_columns(circuit_state: 'circuit_open', circuit_opened_at: opened_at, circuit_disable_at: nil)
+        endpoint.reload
+        deadline = opened_at + Webhooks::CircuitPolicy.disable_window
+
+        expect(endpoint.circuit_disable_at).to be_nil
+        expect(endpoint.disable_window_elapsed?(deadline - 1.second)).to be(false)
+        expect(endpoint.disable_window_elapsed?(deadline)).to be(true)
+      end
+    end
   end
 
   describe '#archived?' do
@@ -248,7 +316,7 @@ describe Endpoint, type: :model do
 
     it 'leaves the previous current secret intact when rotation fails' do
       previous = endpoint.current_signing_secret
-      allow(endpoint).to receive(:new_signing_secret).and_raise(ActiveRecord::RecordNotUnique)
+      expect(endpoint).to receive(:new_signing_secret).once.and_raise(ActiveRecord::RecordNotUnique)
 
       expect { endpoint.rotate_signing_secret! }.to raise_error(ActiveRecord::RecordNotUnique)
 
@@ -310,6 +378,188 @@ describe Endpoint, type: :model do
       endpoint.rotate_signing_secret!
 
       expect(endpoint.signing_secret_version).to eq(2)
+    end
+  end
+
+  describe '#queue_state' do
+    it 'reports ok below the warning threshold' do
+      endpoint = build(:endpoint, queued_message_count: 0)
+
+      expect(endpoint.queue_state).to eq('ok')
+      expect(endpoint).not_to be_queue_full
+    end
+
+    it 'reports warning from eighty percent of the capacity' do
+      endpoint = build(:endpoint, queued_message_count: Webhooks::CircuitPolicy.warning_threshold)
+
+      expect(endpoint.queue_state).to eq('warning')
+      expect(endpoint).not_to be_queue_full
+    end
+
+    it 'reports full once the queue reaches capacity' do
+      endpoint = build(:endpoint, queued_message_count: Webhooks::CircuitPolicy::QUEUE_CAPACITY)
+
+      expect(endpoint.queue_state).to eq('full')
+      expect(endpoint).to be_queue_full
+    end
+  end
+
+  describe '#circuit_disable_at' do
+    it 'is persisted when the circuit opens using the configured window' do
+      endpoint = create(:endpoint)
+      opened_at = Time.zone.local(2026, 1, 1, 12, 0, 0)
+
+      endpoint.open_circuit!(at: opened_at)
+
+      expect(endpoint.reload.circuit_disable_at).to eq(opened_at + Webhooks::CircuitPolicy.disable_window)
+      expect(endpoint.circuit_disable_at).to eq(Time.zone.local(2026, 1, 6, 12, 0, 0))
+    end
+
+    it 'keeps the persisted deadline when the policy or ENV changes afterwards' do
+      endpoint = create(:endpoint)
+      endpoint.open_circuit!(at: Time.zone.local(2026, 1, 1, 12, 0, 0))
+      deadline = endpoint.reload.circuit_disable_at
+
+      Webhooks::CircuitPolicy.disable_window = 10.seconds
+      ENV['WEBHOOK_CIRCUIT_DISABLE_WINDOW_SECONDS'] = '30'
+
+      expect(endpoint.reload.circuit_disable_at).to eq(deadline)
+      expect(endpoint.disable_window_elapsed?(deadline - 1.second)).to be(false)
+      expect(endpoint.disable_window_elapsed?(deadline)).to be(true)
+    end
+
+    it 'is nil while the circuit never opened' do
+      expect(build(:endpoint).circuit_disable_at).to be_nil
+      expect(build(:endpoint).disable_window_elapsed?).to be(false)
+    end
+
+    it 'survives disabling so operators keep the original deadline' do
+      endpoint = create(:endpoint)
+      endpoint.open_circuit!(at: Time.zone.local(2026, 1, 1, 12, 0, 0))
+      deadline = endpoint.reload.circuit_disable_at
+
+      endpoint.disable_circuit!
+
+      expect(endpoint.reload).to be_disabled
+      expect(endpoint.circuit_disable_at).to eq(deadline)
+    end
+
+    it 'is cleared when the circuit is closed' do
+      endpoint = create(:endpoint)
+      endpoint.open_circuit!
+      endpoint.close_circuit!
+
+      endpoint.reload
+      expect(endpoint.circuit_disable_at).to be_nil
+      expect(endpoint.circuit_opened_at).to be_nil
+      expect(endpoint.disable_window_elapsed?).to be(false)
+    end
+  end
+
+  describe '#probe_due?' do
+    it 'is due only for an open circuit whose next probe time has passed' do
+      endpoint = create(:endpoint)
+      endpoint.open_circuit!(at: Time.current)
+
+      expect(endpoint.reload.probe_due?(endpoint.circuit_next_probe_at)).to be(true)
+      expect(endpoint.probe_due?(endpoint.circuit_next_probe_at - 1.second)).to be(false)
+      expect(endpoint.probe_due?(Time.current)).to be(false)
+    end
+
+    it 'is never due for an enabled or disabled endpoint' do
+      endpoint = create(:endpoint)
+
+      expect(endpoint.probe_due?(1.year.from_now)).to be(false)
+
+      endpoint.disable_circuit!
+      expect(endpoint.reload.probe_due?(1.year.from_now)).to be(false)
+    end
+  end
+
+  describe '#acquire_probe_lease!' do
+    context 'when another probe already holds the lease' do
+      it 'refuses the lease and keeps the existing deadline' do
+        endpoint = create(:endpoint)
+        endpoint.acquire_probe_lease!
+        lease = endpoint.reload.circuit_probe_lease_expires_at
+
+        expect(endpoint.acquire_probe_lease!).to be(false)
+        expect(endpoint.reload.circuit_probe_lease_expires_at).to eq(lease)
+      end
+    end
+  end
+
+  describe '#circuit_hold_reason' do
+    it 'is nil while the endpoint delivers normally' do
+      expect(build(:endpoint)).to have_attributes(circuit_hold_reason: nil)
+    end
+
+    it 'explains why a message is held per circuit state' do
+      expect(build(:endpoint, circuit_state: 'circuit_open').circuit_hold_reason).to eq('endpoint_circuit_open')
+      expect(build(:endpoint, circuit_state: 'disabled').circuit_hold_reason).to eq('endpoint_disabled')
+    end
+  end
+
+  describe '#register_circuit_failure!' do
+    let(:endpoint) { create(:endpoint) }
+    let(:counted_failure) { http_result(status: 500) }
+    let(:ignored_failure) { http_result(status: 404) }
+
+    it 'opens the circuit on the fifth consecutive failure' do
+      endpoint.update_columns(circuit_failure_count: Webhooks::CircuitPolicy::FAILURE_THRESHOLD - 1)
+
+      endpoint.register_circuit_failure!(counted_failure)
+
+      expect(endpoint.reload).to be_circuit_open
+      expect(endpoint.circuit_opened_at).to be_present
+      expect(endpoint.circuit_disable_at).to be_present
+      expect(endpoint.circuit_next_probe_at).to be_present
+    end
+
+    it 'stays enabled below the failure threshold' do
+      endpoint.register_circuit_failure!(counted_failure)
+
+      expect(endpoint.reload).to be_enabled
+      expect(endpoint.circuit_failure_count).to eq(1)
+    end
+
+    it 'ignores a failure the circuit policy does not count' do
+      endpoint.register_circuit_failure!(ignored_failure)
+
+      expect(endpoint.reload).to be_enabled
+      expect(endpoint.circuit_failure_count).to eq(0)
+    end
+  end
+
+  describe '#register_probe_failure!' do
+    let(:endpoint) { create(:endpoint) }
+    let(:opened_at) { Time.zone.local(2026, 1, 1, 12, 0, 0) }
+    let(:counted_failure) { http_result(status: 500) }
+
+    before do
+      endpoint.open_circuit!(at: opened_at)
+      endpoint.update_columns(circuit_failure_count: 0)
+    end
+
+    context 'when the disable window is still running' do
+      it 'counts the failed probe and schedules the next probe' do
+        endpoint.register_probe_failure!(counted_failure, at: opened_at + 1.minute)
+
+        endpoint.reload
+        expect(endpoint).to be_circuit_open
+        expect(endpoint.circuit_failure_count).to eq(1)
+        expect(endpoint.circuit_next_probe_at).to be > opened_at
+      end
+    end
+
+    context 'when the disable window has elapsed' do
+      it 'counts the failed probe and disables the endpoint' do
+        endpoint.register_probe_failure!(counted_failure, at: opened_at + Webhooks::CircuitPolicy.disable_window)
+
+        endpoint.reload
+        expect(endpoint).to be_disabled
+        expect(endpoint.circuit_failure_count).to eq(1)
+      end
     end
   end
 end

@@ -128,6 +128,55 @@ describe 'Events', type: :request do
       expect(response).to have_http_status(:unprocessable_entity)
     end
 
+    context 'when an eligible endpoint queue is full' do
+      let(:endpoint) { create(:endpoint, project: project, event_types: ['order.created']) }
+
+      before { endpoint.update_columns(queued_message_count: Webhooks::CircuitPolicy::QUEUE_CAPACITY) }
+
+      it 'rejects the event with a retry hint and records the rejection' do
+        post '/api/v1/events', params: event_attributes, headers: headers, as: :json
+
+        expect(response).to have_http_status(:too_many_requests)
+        expect(response.headers['Retry-After']).to eq('30')
+        expect(json_response).to include('code' => 'queue_capacity_exceeded', 'status' => 429)
+        expect(Event.where(project: project).count).to eq(0)
+        expect(Message.where(endpoint_id: endpoint.id).count).to eq(0)
+        expect(IngestRejection.sole.reason).to eq('queue_capacity_exceeded')
+      end
+
+      it 'accepts the same idempotency key once capacity is available again' do
+        post '/api/v1/events', params: event_attributes, headers: headers, as: :json
+        expect(response).to have_http_status(:too_many_requests)
+
+        endpoint.update_columns(queued_message_count: 0)
+        post '/api/v1/events', params: event_attributes, headers: headers, as: :json
+
+        expect(response).to have_http_status(:accepted)
+        expect(Event.where(project: project).count).to eq(1)
+      end
+    end
+
+    context 'when the endpoint circuit is open' do
+      let(:endpoint) { create(:endpoint, project: project, event_types: ['order.created']) }
+
+      before do
+        endpoint.update!(
+          circuit_state: 'circuit_open',
+          circuit_failure_count: 5,
+          circuit_opened_at: Time.current,
+          circuit_next_probe_at: Time.current
+        )
+      end
+
+      it 'accepts the event and holds the message without enqueueing delivery' do
+        post '/api/v1/events', params: event_attributes, headers: headers, as: :json
+
+        expect(response).to have_http_status(:accepted)
+        expect(endpoint.messages.sole).to be_held
+        expect(ActiveJob::Base.queue_adapter.enqueued_jobs).to be_empty
+      end
+    end
+
     context 'when the credential is missing or invalid' do
       it 'returns unauthorized without a credential' do
         post '/api/v1/events', params: event_attributes, as: :json
