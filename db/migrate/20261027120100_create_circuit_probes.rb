@@ -20,7 +20,6 @@ class CreateCircuitProbes < ActiveRecord::Migration[8.0]
 
       t.index %i[endpoint_id created_at]
       t.index %i[endpoint_id status]
-      t.check_constraint "status IN ('pending', 'succeeded', 'failed')", name: 'circuit_probes_status_check'
     end
   end
 end

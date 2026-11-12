@@ -19,7 +19,7 @@
 #  fk_rails_...  (billing_owner_id => users.id) ON DELETE => restrict
 #
 class Project < ApplicationRecord
-  MAX_RETRY_DELAY_SLOTS = Webhooks::DeliveryPolicy::DEFAULT_RETRY_DELAYS.size
+  MAX_RETRY_DELAY_SLOTS = Webhooks::DeliveryPolicy::RETRY_DELAYS.size
 
   belongs_to :billing_owner, class_name: 'User', inverse_of: :owned_projects
 

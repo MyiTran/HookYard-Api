@@ -9,11 +9,9 @@ describe Messages::PendingDeliveryRecoveryJob, type: :job do
 
   describe '#perform' do
     it 'recovers the deliveries that were never enqueued' do
-      allow(Messages::EnqueuePending).to receive(:call)
+      expect(Messages::EnqueuePending).to receive(:call).once
 
       described_class.new.perform
-
-      expect(Messages::EnqueuePending).to have_received(:call)
     end
   end
 end

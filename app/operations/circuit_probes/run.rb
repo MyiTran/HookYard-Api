@@ -20,7 +20,7 @@ module CircuitProbes
 
     def call(endpoint:)
       @endpoint = endpoint
-      claim = claim_probe
+      claim = claim_probe!
 
       return endpoint.reload unless claim.claimed?
 
@@ -30,7 +30,7 @@ module CircuitProbes
         body: claim.body,
         timeout: Webhooks::DeliveryPolicy.timeout_seconds_for(endpoint.project)
       )
-      finalize(claim, result)
+      finalize!(claim, result)
 
       endpoint.reload
     end
@@ -39,7 +39,7 @@ module CircuitProbes
 
     attr_reader :http_client, :signer, :endpoint
 
-    def claim_probe
+    def claim_probe!
       endpoint.with_lock do
         endpoint.reload
         return Claim.new(outcome: :skipped) unless endpoint.probe_due?(now)
@@ -48,18 +48,18 @@ module CircuitProbes
         secret = EndpointSigningSecret.current.find_by(endpoint_id: endpoint.id)
 
         if secret.nil?
-          record_missing_secret
+          record_missing_secret!
           return Claim.new(outcome: :skipped)
         end
 
-        expire_abandoned_probe
+        expire_abandoned_probe!
         endpoint.acquire_probe_lease!(at: now)
 
-        build_claim(secret)
+        build_claim!(secret)
       end
     end
 
-    def build_claim(secret)
+    def build_claim!(secret)
       probe = endpoint.circuit_probes.new(probe_attributes(secret))
       probe.save!
 
@@ -127,7 +127,7 @@ module CircuitProbes
       endpoint.url
     end
 
-    def record_missing_secret
+    def record_missing_secret!
       webhook_id = generate_id
 
       endpoint.circuit_probes.create!(
@@ -145,7 +145,7 @@ module CircuitProbes
       endpoint.schedule_next_probe!
     end
 
-    def expire_abandoned_probe
+    def expire_abandoned_probe!
       abandoned = endpoint.circuit_probes.pending.where(created_at: ...(now - lease_duration))
       return if abandoned.empty?
 
@@ -158,15 +158,15 @@ module CircuitProbes
       )
     end
 
-    def finalize(claim, result)
+    def finalize!(claim, result)
       closed_circuit = false
 
       CircuitProbe.transaction do
         endpoint.with_lock do
           endpoint.reload
 
-          record_result(claim.probe, result)
-          closed_circuit = resolve_circuit(result) if owns_lease?(claim)
+          record_result!(claim.probe, result)
+          closed_circuit = resolve_circuit!(result) if owns_lease?(claim)
         end
       end
 
@@ -178,7 +178,7 @@ module CircuitProbes
         endpoint.circuit_probe_lease_expires_at == claim.lease_expires_at
     end
 
-    def record_result(probe, result)
+    def record_result!(probe, result)
       if result.error?
         probe.update!(
           status: :failed,
@@ -199,26 +199,20 @@ module CircuitProbes
       end
     end
 
-    def resolve_circuit(result)
+    def resolve_circuit!(result)
       endpoint.release_probe_lease!
 
       if Webhooks::CircuitPolicy.success?(result)
         endpoint.close_circuit!
         true
       else
-        resolve_probe_failure(result)
+        resolve_probe_failure!(result)
         false
       end
     end
 
-    def resolve_probe_failure(result)
-      endpoint.increment!(:circuit_failure_count) if Webhooks::CircuitPolicy.counted_failure?(result)
-
-      if endpoint.disable_window_elapsed?
-        endpoint.disable_circuit!
-      else
-        endpoint.schedule_next_probe!
-      end
+    def resolve_probe_failure!(result)
+      endpoint.register_probe_failure!(result, at: now)
     end
 
     def lease_duration

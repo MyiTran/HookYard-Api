@@ -1,6 +1,11 @@
 require 'rails_helper'
 
 describe Messages::DeliverJob, type: :job do
+  it 'is enqueued in the default queue' do
+    expect { described_class.perform_later(SecureRandom.uuid) }
+      .to have_enqueued_job(described_class).on_queue('default')
+  end
+
   describe 'sidekiq options' do
     it 'disables the automatic Sidekiq retry so the delivery policy owns the timing' do
       expect(described_class.sidekiq_options['retry']).to be(false)
@@ -8,13 +13,15 @@ describe Messages::DeliverJob, type: :job do
   end
 
   describe '#perform' do
-    it 'delegates the delivery to the operation' do
+    it 'delegates the delivery to Messages::Deliver' do
       message = create(:message)
-      allow(Messages::Deliver).to receive(:call)
+      expect(Messages::Deliver).to receive(:call).with(message: message).once
 
-      described_class.new.perform(message.id)
+      described_class.perform_now(message.id)
+    end
 
-      expect(Messages::Deliver).to have_received(:call).with(message: message)
+    it 'discards a message that no longer exists' do
+      expect { described_class.perform_now(SecureRandom.uuid) }.not_to raise_error
     end
   end
 end

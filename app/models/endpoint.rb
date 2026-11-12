@@ -55,6 +55,8 @@ class Endpoint < ApplicationRecord
 
   validates :name, presence: true
   validates :url, presence: true
+  validates :circuit_failure_count, numericality: { only_integer: true, greater_than_or_equal_to: 0 }
+  validates :queued_message_count, numericality: { only_integer: true, greater_than_or_equal_to: 0 }
   validate :url_must_be_http
   validate :event_types_must_be_consistent
 
@@ -123,14 +125,25 @@ class Endpoint < ApplicationRecord
   end
 
   def disable_window_elapsed?(at = Time.current)
-    circuit_disable_at.present? && at >= circuit_disable_at
+    deadline = circuit_disable_at || derived_disable_at
+
+    deadline.present? && at >= deadline
   end
 
-  def register_circuit_failure!(at: Time.current)
+  def register_circuit_failure!(result, at: Time.current)
     return unless enabled?
+    return unless Webhooks::CircuitPolicy.counted_failure?(result)
 
-    increment!(:circuit_failure_count)
+    count_circuit_failure!
     open_circuit!(at: at) if circuit_failure_count >= Webhooks::CircuitPolicy::FAILURE_THRESHOLD
+  end
+
+  def register_probe_failure!(result, at: Time.current)
+    count_circuit_failure! if Webhooks::CircuitPolicy.counted_failure?(result)
+
+    return disable_circuit!(at: at) if disable_window_elapsed?(at)
+
+    schedule_next_probe!(at: at)
   end
 
   def open_circuit!(at: Time.current)
@@ -191,6 +204,14 @@ class Endpoint < ApplicationRecord
   end
 
   private
+
+  def count_circuit_failure!
+    increment!(:circuit_failure_count)
+  end
+
+  def derived_disable_at
+    circuit_opened_at && circuit_opened_at + Webhooks::CircuitPolicy.disable_window
+  end
 
   def next_signing_secret_version
     (endpoint_signing_secrets.maximum(:version) || 0) + 1

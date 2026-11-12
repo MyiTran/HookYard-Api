@@ -11,7 +11,7 @@ module Messages
         message_ids = releasable_ids(endpoint, except_ids + released_ids)
         break if message_ids.empty?
 
-        release(message_ids)
+        release!(message_ids)
         released_ids.concat(message_ids)
         Messages::EnqueueDelivery.call(message_ids: message_ids)
       end
@@ -30,7 +30,7 @@ module Messages
            .pluck(:id)
     end
 
-    def release(message_ids)
+    def release!(message_ids)
       Message.pending.where(id: message_ids)
              .update_all(held_at: nil, hold_reason: nil, next_retry_at: nil, updated_at: Time.current)
     end

@@ -52,18 +52,6 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_29_110000) do
     t.index ["user_id"], name: "index_allowlisted_jwts_on_user_id"
   end
 
-  create_table "api_credentials", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
-    t.uuid "project_id", null: false
-    t.string "name", null: false
-    t.string "token_prefix", null: false
-    t.string "token_digest", null: false
-    t.datetime "revoked_at"
-    t.datetime "created_at", null: false
-    t.datetime "updated_at", null: false
-    t.index ["project_id"], name: "index_api_credentials_on_project_id"
-    t.index ["token_digest"], name: "index_api_credentials_on_token_digest", unique: true
-  end
-
   create_table "cable_tickets", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.uuid "user_id", null: false
     t.string "token", null: false
@@ -97,7 +85,6 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_29_110000) do
     t.index ["endpoint_id", "created_at"], name: "index_circuit_probes_on_endpoint_id_and_created_at"
     t.index ["endpoint_id", "status"], name: "index_circuit_probes_on_endpoint_id_and_status"
     t.index ["endpoint_id"], name: "index_circuit_probes_on_endpoint_id"
-    t.check_constraint "status::text = ANY (ARRAY['pending'::character varying, 'succeeded'::character varying, 'failed'::character varying]::text[])", name: "circuit_probes_status_check"
   end
 
   create_table "delivery_attempts", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -159,9 +146,6 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_29_110000) do
     t.index ["circuit_state", "circuit_next_probe_at"], name: "index_endpoints_on_circuit_state_and_next_probe_at"
     t.index ["project_id"], name: "index_endpoints_on_project_id"
     t.check_constraint "NOT ('*'::text = ANY (event_types::text[])) OR cardinality(event_types) = 1", name: "endpoints_wildcard_subscription_exclusive"
-    t.check_constraint "circuit_failure_count >= 0", name: "endpoints_circuit_failure_count_non_negative"
-    t.check_constraint "circuit_state::text = ANY (ARRAY['enabled'::character varying, 'circuit_open'::character varying, 'disabled'::character varying]::text[])", name: "endpoints_circuit_state_valid"
-    t.check_constraint "queued_message_count >= 0", name: "endpoints_queued_message_count_non_negative"
   end
 
   create_table "events", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -215,8 +199,6 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_29_110000) do
     t.index ["status", "next_retry_at"], name: "index_messages_on_status_and_next_retry_at"
     t.index ["updated_at"], name: "index_messages_on_pending_updated_at", where: "((status)::text = 'pending'::text)"
     t.check_constraint "attempt_count >= 0", name: "messages_attempt_count_non_negative"
-    t.check_constraint "hold_reason IS NULL OR (hold_reason::text = ANY (ARRAY['endpoint_circuit_open'::character varying, 'endpoint_disabled'::character varying]::text[]))", name: "messages_hold_reason_valid"
-    t.check_constraint "status::text = 'pending'::text OR held_at IS NULL AND hold_reason IS NULL", name: "messages_hold_requires_pending"
     t.check_constraint "status::text = ANY (ARRAY['pending'::character varying, 'delivering'::character varying, 'succeeded'::character varying, 'failed'::character varying]::text[])", name: "messages_status_valid"
   end
 
@@ -288,9 +270,6 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_29_110000) do
     t.integer "delivery_retry_delays_seconds", array: true
     t.uuid "billing_owner_id", null: false
     t.index ["billing_owner_id"], name: "index_projects_on_billing_owner_id"
-    t.check_constraint "delivery_retry_delays_seconds IS NULL OR (0 < ALL (delivery_retry_delays_seconds))", name: "projects_delivery_retry_delays_positive"
-    t.check_constraint "delivery_retry_delays_seconds IS NULL OR cardinality(delivery_retry_delays_seconds) >= 1 AND cardinality(delivery_retry_delays_seconds) <= 7", name: "projects_delivery_retry_delays_size"
-    t.check_constraint "delivery_timeout_seconds IS NULL OR delivery_timeout_seconds >= 1 AND delivery_timeout_seconds <= 30", name: "projects_delivery_timeout_seconds_range"
   end
 
   create_table "roles", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -351,7 +330,6 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_29_110000) do
   add_foreign_key "active_storage_attachments", "active_storage_blobs", column: "blob_id"
   add_foreign_key "active_storage_variant_records", "active_storage_blobs", column: "blob_id"
   add_foreign_key "allowlisted_jwts", "users", on_delete: :cascade
-  add_foreign_key "api_credentials", "projects", on_delete: :cascade
   add_foreign_key "cable_tickets", "users", on_delete: :cascade
   add_foreign_key "circuit_probes", "endpoints", on_delete: :cascade
   add_foreign_key "delivery_attempts", "messages", on_delete: :cascade
