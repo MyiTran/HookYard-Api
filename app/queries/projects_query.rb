@@ -10,7 +10,9 @@ class ProjectsQuery < ApplicationQuery
   DEFAULT_ORDER = 'created_desc'
 
   def call(scope = Project.none, **params)
-    scope = filter(scope, :by_search, params[:search])
+    scope = filter(scope, :by_search, params[:search].presence || params[:q])
+    scope = filter(scope, :by_billing_owner, params[:account_id].presence || params[:billing_owner_id])
+    scope = filter(scope, :by_plan, params[:plan])
     scope = by_role(scope, params[:role], params[:user])
 
     apply_order(scope, params[:order])
@@ -20,6 +22,18 @@ class ProjectsQuery < ApplicationQuery
 
   def by_search(scope, search)
     scope.where('projects.name ILIKE ?', "%#{search}%")
+  end
+
+  def by_billing_owner(scope, account_id)
+    return scope unless valid_uuid?(account_id)
+
+    scope.where(billing_owner_id: account_id)
+  end
+
+  def by_plan(scope, plan)
+    return scope unless User::PLANS.include?(plan.to_s)
+
+    scope.joins(:billing_owner).where(users: { plan: plan.to_s })
   end
 
   def by_role(scope, role, user)

@@ -1,6 +1,9 @@
 class MessagesQuery < ApplicationQuery
   include MessageAttemptSummary
 
+  LAST_RESPONSE_STATUS_ALIAS = 'delivery_attempt_stats.last_response_status'.freeze
+  LAST_ERROR_TYPE_ALIAS = 'delivery_attempt_stats.last_error_type'.freeze
+
   ORDERS = {
     'created_desc' => { created_at: :desc, id: :desc },
     'created_asc' => { created_at: :asc, id: :asc }
@@ -25,6 +28,7 @@ class MessagesQuery < ApplicationQuery
     scope = filter(scope, :by_project, params[:project_id])
     scope = filter(scope, :by_endpoint, params[:endpoint_id])
     scope = filter(scope, :by_status, params[:status])
+    scope = filter(scope, :by_failure_category, params[:failure_category])
     scope = filter(scope, :by_delivery_state, params[:delivery_state])
     scope = filter(scope, :by_event_type, params[:event_type])
     scope = filter(scope, :by_from, params[:from])
@@ -77,6 +81,49 @@ class MessagesQuery < ApplicationQuery
     return scope unless Message.statuses.key?(status.to_s)
 
     scope.where(status: status.to_s)
+  end
+
+  def by_failure_category(scope, category)
+    condition = failure_category_condition(category.to_s)
+    return scope if condition.nil?
+
+    scope.where(condition).where(failed_delivery_condition)
+  end
+
+  def failed_delivery_condition
+    success_statuses = DeliveryAttempt::RESPONSE_SUCCESS_STATUSES
+
+    ActiveRecord::Base.sanitize_sql_array(
+      ["#{LAST_RESPONSE_STATUS_ALIAS} IS NULL OR #{LAST_RESPONSE_STATUS_ALIAS} NOT BETWEEN ? AND ?",
+       success_statuses.first, success_statuses.last]
+    )
+  end
+
+  def failure_category_condition(category)
+    case category
+    when Webhooks::FailureCategory::DESTINATION_REJECTED
+      last_error_type_in(Webhooks::FailureCategory::DESTINATION_REJECTION_TYPES)
+    when Webhooks::FailureCategory::INTERRUPTED
+      last_error_type_in(Webhooks::FailureCategory::INTERRUPTED_ERROR_TYPES)
+    when Webhooks::FailureCategory::TIMEOUT
+      last_error_type_in(Webhooks::FailureCategory::TIMEOUT_ERROR_TYPES)
+    when Webhooks::FailureCategory::NETWORK
+      ActiveRecord::Base.sanitize_sql_array(
+        ["#{LAST_ERROR_TYPE_ALIAS} IS NOT NULL AND #{LAST_ERROR_TYPE_ALIAS} NOT IN (?)", classified_error_types]
+      )
+    when Webhooks::FailureCategory::HTTP_ERROR
+      "#{LAST_RESPONSE_STATUS_ALIAS} IS NOT NULL AND #{LAST_ERROR_TYPE_ALIAS} IS NULL"
+    end
+  end
+
+  def last_error_type_in(error_types)
+    ActiveRecord::Base.sanitize_sql_array(["#{LAST_ERROR_TYPE_ALIAS} IN (?)", error_types])
+  end
+
+  def classified_error_types
+    Webhooks::FailureCategory::DESTINATION_REJECTION_TYPES +
+      Webhooks::FailureCategory::INTERRUPTED_ERROR_TYPES +
+      Webhooks::FailureCategory::TIMEOUT_ERROR_TYPES
   end
 
   def by_delivery_state(scope, state)

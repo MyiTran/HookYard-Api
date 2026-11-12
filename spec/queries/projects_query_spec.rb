@@ -74,6 +74,36 @@ describe ProjectsQuery do
     end
   end
 
+  describe 'admin navigation filters' do
+    let(:owner) { create(:user, :pro) }
+    let(:other_owner) { create(:user) }
+    let!(:owned_project) { create(:project, billing_owner: owner, name: 'Owned Project') }
+    let!(:joined_project) do
+      create(:project, billing_owner: other_owner, name: 'Joined Project').tap do |project|
+        create(:project_membership, project: project, user: owner, role: :maintainer)
+      end
+    end
+    let!(:free_project) { create(:project, billing_owner: other_owner, name: 'Free Project') }
+
+    def run(**params)
+      described_class.call(Project.where(id: [owned_project.id, joined_project.id, free_project.id]), **params)
+    end
+
+    it 'filters projects by billing owner id' do
+      expect(run(account_id: owner.id)).to contain_exactly(owned_project)
+      expect(run(billing_owner_id: owner.id)).to contain_exactly(owned_project)
+    end
+
+    it 'filters projects by the effective billing owner plan' do
+      expect(run(plan: User::PRO_PLAN)).to contain_exactly(owned_project)
+    end
+
+    it 'ignores an invalid account id and plan' do
+      expect(run(account_id: 'not-a-uuid')).to contain_exactly(owned_project, joined_project, free_project)
+      expect(run(plan: 'enterprise')).to contain_exactly(owned_project, joined_project, free_project)
+    end
+  end
+
   describe 'tenant isolation' do
     it 'never returns a project the user is not a member of' do
       create(:project, :with_owner, name: 'Payment Secret')

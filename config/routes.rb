@@ -85,9 +85,14 @@ Rails.application.routes.draw do
       namespace :admin do
         resource :dashboard, only: %i[show]
 
-        resources :accounts, only: [] do
+        resources :support_accounts, only: %i[index]
+        resources :accounts, only: %i[show] do
           patch :plan, on: :member
         end
+        resources :projects, only: %i[index show]
+        resources :endpoints, only: %i[index show]
+
+        resources :deliveries, only: %i[index]
 
         resources :ingest_rejections, only: %i[index]
       end

@@ -193,6 +193,25 @@ class Endpoint < ApplicationRecord
     true
   end
 
+  def reserve_probe_lease!(at: Time.current)
+    updated = self.class.probe_due(at).where(id: id).update_all(
+      circuit_probe_lease_expires_at: at + Webhooks::DeliveryPolicy.delivery_lease_duration,
+      updated_at: at
+    )
+
+    updated == 1
+  end
+
+  def release_probe_reservation!(reservation_token)
+    return false if reservation_token.blank?
+
+    expires_at = Time.zone.parse(reservation_token)&.utc
+    return false if expires_at.nil?
+
+    self.class.where(id: id, circuit_probe_lease_expires_at: expires_at)
+        .update_all(circuit_probe_lease_expires_at: nil, updated_at: Time.current) == 1
+  end
+
   def release_probe_lease!
     update!(circuit_probe_lease_expires_at: nil) if circuit_probe_lease_expires_at.present?
   end

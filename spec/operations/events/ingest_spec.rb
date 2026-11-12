@@ -361,6 +361,38 @@ describe Events::Ingest, type: :operation do
       end
     end
 
+    context 'when a pro member ingests into a free owner project' do
+      let(:pro_member) { create(:user, :pro) }
+
+      before do
+        create(:project_membership, project: project, user: pro_member, role: :maintainer)
+        limit = Plans::Entitlements.monthly_delivery_limit(account)
+        UserUsagePeriod.reserve_deliveries(user: account, quantity: limit, limit: limit)
+      end
+
+      it 'uses the billing owner free quota rather than the member plan' do
+        expect { described_class.call(project: project, attributes: attributes) }
+          .to raise_error(ApiError::PlanLimitExceededError)
+
+        expect(pro_member.deliveries_used_in_period).to eq(0)
+      end
+    end
+
+    context 'when a platform admin is a member of a free owner project' do
+      let(:admin_member) { create(:user).tap { |user| user.add_role(:admin) } }
+
+      before do
+        create(:project_membership, project: project, user: admin_member, role: :maintainer)
+        limit = Plans::Entitlements.monthly_delivery_limit(account)
+        UserUsagePeriod.reserve_deliveries(user: account, quantity: limit, limit: limit)
+      end
+
+      it 'does not grant admin entitlement to the customer project quota' do
+        expect { described_class.call(project: project, attributes: attributes) }
+          .to raise_error(ApiError::PlanLimitExceededError)
+      end
+    end
+
     context 'when the billing account owns several projects' do
       let!(:sibling_project) { create(:project, :with_owner, owner: account) }
 

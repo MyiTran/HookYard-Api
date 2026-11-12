@@ -84,6 +84,33 @@ describe MessagesQuery do
     end
   end
 
+  describe 'failure category filter' do
+    it 'filters messages by the failure category of their latest attempt' do
+      create(:delivery_attempt, message: failed_message, attempt_number: 1, error_type: 'Net::ReadTimeout')
+
+      expect(run(failure_category: Webhooks::FailureCategory::TIMEOUT)).to contain_exactly(failed_message)
+    end
+
+    it 'classifies the latest attempt only' do
+      retried_message = new_message
+      create(:delivery_attempt, message: retried_message, attempt_number: 1, error_type: 'Net::ReadTimeout')
+      create(:delivery_attempt, message: retried_message, attempt_number: 2, response_status: 500)
+
+      expect(run(failure_category: Webhooks::FailureCategory::HTTP_ERROR)).to contain_exactly(retried_message)
+      expect(run(failure_category: Webhooks::FailureCategory::TIMEOUT)).to be_empty
+    end
+
+    it 'never classifies a successful delivery as a failure' do
+      create(:delivery_attempt, message: succeeded_message, attempt_number: 1, response_status: 200)
+
+      expect(run(failure_category: Webhooks::FailureCategory::HTTP_ERROR)).to be_empty
+    end
+
+    it 'ignores an unknown category' do
+      expect(run(failure_category: 'made_up').count(:all)).to eq(7)
+    end
+  end
+
   describe 'exact identifier search' do
     let!(:attempt) { create(:delivery_attempt, message: queued_message, request_id: 'req_exact-123') }
 

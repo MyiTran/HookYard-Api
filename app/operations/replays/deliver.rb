@@ -147,6 +147,8 @@ module Replays
           duration_ms: result.duration_ms
         )
       end
+
+      DeliveryMetric.record_attempt!(attempt)
     end
 
     def finish_item(result)

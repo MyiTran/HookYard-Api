@@ -130,6 +130,8 @@ class Message < ApplicationRecord
   end
 
   def failure_category
+    return nil if DeliveryAttempt::RESPONSE_SUCCESS_STATUSES.cover?(last_response_status)
+
     Webhooks::FailureCategory.for(error_type: last_error_type, response_status: last_response_status)
   end
 
@@ -215,6 +217,7 @@ class Message < ApplicationRecord
     return unless released == 1
 
     Endpoint.where(id: endpoint_id)
+            .where('queued_message_count > 0')
             .update_all('queued_message_count = queued_message_count - 1')
   end
 
