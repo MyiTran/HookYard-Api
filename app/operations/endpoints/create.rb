@@ -13,7 +13,9 @@ module Endpoints
     private
 
     def ensure_endpoint_slot_available!(project)
-      account = project.billing_owner
+      account = project.effective_billing_owner
+      raise ApiError::UnprocessableEntityError.new(message: 'Project has no billing owner') if account.nil?
+
       limit = Plans::Entitlements.endpoint_limit(account)
       used = project.endpoint_count
       return if used < limit

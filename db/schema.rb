@@ -168,6 +168,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_29_110000) do
     t.uuid "endpoint_id"
     t.string "reason", null: false
     t.string "event_type"
+    t.string "idempotency_key"
     t.jsonb "payload", default: {}, null: false
     t.datetime "created_at", null: false
     t.string "idempotency_key_digest"
@@ -268,7 +269,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_29_110000) do
     t.datetime "updated_at", null: false
     t.integer "delivery_timeout_seconds"
     t.integer "delivery_retry_delays_seconds", array: true
-    t.uuid "billing_owner_id", null: false
+    t.uuid "billing_owner_id"
     t.index ["billing_owner_id"], name: "index_projects_on_billing_owner_id"
   end
 
@@ -350,6 +351,5 @@ ActiveRecord::Schema[8.0].define(version: 2026_10_29_110000) do
   add_foreign_key "project_invitations", "users", column: "recipient_id", on_delete: :cascade
   add_foreign_key "project_memberships", "projects", on_delete: :cascade
   add_foreign_key "project_memberships", "users", on_delete: :cascade
-  add_foreign_key "projects", "users", column: "billing_owner_id", on_delete: :restrict
   add_foreign_key "user_usage_periods", "users", on_delete: :cascade
 end

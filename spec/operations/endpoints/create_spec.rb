@@ -99,5 +99,34 @@ describe Endpoints::Create, type: :operation do
         expect(saturated_project.endpoint_count).to eq(endpoint_limit)
       end
     end
+
+    context 'when the project has no persisted billing owner' do
+      let(:project) do
+        create(:project, :with_owner).tap { |created| created.update_columns(billing_owner_id: nil) }
+      end
+      let(:account) { project.effective_billing_owner }
+
+      before { create_list(:endpoint, endpoint_limit, project: project) }
+
+      it 'enforces the owner membership plan limit' do
+        expect { described_class.call(project: project, attributes: { name: 'Billing', url: 'https://example.com/hooks' }) }
+          .to raise_error(ApiError::PlanLimitExceededError)
+
+        expect(project.endpoints.not_archived.count).to eq(endpoint_limit)
+      end
+    end
+
+    context 'when the project has no owner membership' do
+      let(:project) do
+        create(:project).tap { |created| created.update_columns(billing_owner_id: nil) }
+      end
+
+      it 'fails with a clear error instead of choosing a maintainer' do
+        create(:project_membership, project: project, user: create(:user), role: :maintainer)
+
+        expect { described_class.call(project: project, attributes: { name: 'Billing', url: 'https://example.com/hooks' }) }
+          .to raise_error(ApiError::UnprocessableEntityError, 'Project has no billing owner')
+      end
+    end
   end
 end

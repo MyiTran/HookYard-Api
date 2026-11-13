@@ -9,7 +9,7 @@ class ProjectUsageSummary
   end
 
   def deliveries_for(project)
-    deliveries.fetch(project.billing_owner_id, 0)
+    deliveries.fetch(project.effective_billing_owner_id, 0)
   end
 
   private
@@ -21,7 +21,7 @@ class ProjectUsageSummary
   end
 
   def account_ids
-    projects.map(&:billing_owner_id).uniq
+    projects.map(&:effective_billing_owner_id).compact.uniq
   end
 
   def endpoint_counts

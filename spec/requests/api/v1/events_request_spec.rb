@@ -128,6 +128,24 @@ describe 'Events', type: :request do
       expect(response).to have_http_status(:unprocessable_entity)
     end
 
+    context 'when the project has no billing owner and no owner membership' do
+      let(:legacy) { create(:project).tap { |created| created.update_columns(billing_owner_id: nil) } }
+      let(:legacy_raw_token) { ProjectApiCredential.generate_token }
+
+      before { create(:project_api_credential, project: legacy, raw_token: legacy_raw_token) }
+
+      it 'rejects the event with a controlled error instead of failing' do
+        post '/api/v1/events',
+             params: event_attributes,
+             headers: { 'Authorization' => "Bearer #{legacy_raw_token}" },
+             as: :json
+
+        expect(response).to have_http_status(:unprocessable_entity)
+        expect(JSON.parse(response.body)['message']).to eq('Project has no billing owner')
+        expect(Event.where(project: legacy).count).to eq(0)
+      end
+    end
+
     context 'when an eligible endpoint queue is full' do
       let(:endpoint) { create(:endpoint, project: project, event_types: ['order.created']) }
 

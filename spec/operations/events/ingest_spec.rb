@@ -432,7 +432,7 @@ describe Events::Ingest, type: :operation do
         rejection = project.ingest_rejections.sole
         expect(rejection.idempotency_key_digest).to eq(Digest::SHA256.hexdigest(attributes[:idempotency_key]))
         expect(rejection.idempotency_key_digest).not_to eq(attributes[:idempotency_key])
-        expect(IngestRejection.column_names).not_to include('idempotency_key')
+        expect(rejection.idempotency_key).to be_nil
       end
     end
 
@@ -518,6 +518,40 @@ describe Events::Ingest, type: :operation do
         described_class.call(project: sibling_project, attributes: attributes.merge(idempotency_key: 'sibling-key'))
 
         expect(account.deliveries_used_in_period).to eq(2)
+      end
+    end
+
+    context 'when the project has no persisted billing owner' do
+      let(:project) do
+        create(:project, :with_owner).tap { |created| created.update_columns(billing_owner_id: nil) }
+      end
+      let(:account) { project.effective_billing_owner }
+
+      it 'meters deliveries against the owner membership account' do
+        described_class.call(project: project, attributes: attributes)
+
+        expect(account.deliveries_used_in_period).to eq(1)
+      end
+
+      it 'enforces the owner membership monthly delivery limit' do
+        limit = Plans::Entitlements.monthly_delivery_limit(account)
+        UserUsagePeriod.reserve_deliveries!(user: account, quantity: limit, limit: limit)
+
+        expect { described_class.call(project: project, attributes: attributes) }
+          .to raise_error(ApiError::PlanLimitExceededError)
+      end
+    end
+
+    context 'when the project has no owner membership' do
+      let(:project) do
+        create(:project).tap { |created| created.update_columns(billing_owner_id: nil) }
+      end
+
+      it 'fails with a clear error instead of choosing a maintainer' do
+        create(:project_membership, project: project, user: create(:user), role: :maintainer)
+
+        expect { described_class.call(project: project, attributes: attributes) }
+          .to raise_error(ApiError::UnprocessableEntityError, 'Project has no billing owner')
       end
     end
   end

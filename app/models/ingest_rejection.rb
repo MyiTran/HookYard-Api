@@ -4,6 +4,7 @@
 #
 #  id                     :uuid             not null, primary key
 #  event_type             :string
+#  idempotency_key         :string
 #  idempotency_key_digest :string
 #  payload                :jsonb            not null
 #  reason                 :string           not null

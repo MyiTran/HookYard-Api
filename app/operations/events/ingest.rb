@@ -72,7 +72,9 @@ module Events
 
     def reserve_delivery_quota!(project, deliveries)
       now = Time.current
-      account = project.billing_owner
+      account = project.effective_billing_owner
+      raise ApiError::UnprocessableEntityError.new(message: 'Project has no billing owner') if account.nil?
+
       limit = Plans::Entitlements.monthly_delivery_limit(account)
 
       return if UserUsagePeriod.reserve_deliveries!(user: account, quantity: deliveries, limit: limit, at: now)

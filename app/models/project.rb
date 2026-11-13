@@ -8,20 +8,16 @@
 #  name                          :string           not null
 #  created_at                    :datetime         not null
 #  updated_at                    :datetime         not null
-#  billing_owner_id              :uuid             not null
+#  billing_owner_id              :uuid
 #
 # Indexes
 #
 #  index_projects_on_billing_owner_id  (billing_owner_id)
 #
-# Foreign Keys
-#
-#  fk_rails_...  (billing_owner_id => users.id) ON DELETE => restrict
-#
 class Project < ApplicationRecord
   MAX_RETRY_DELAY_SLOTS = Webhooks::DeliveryPolicy::RETRY_DELAYS.size
 
-  belongs_to :billing_owner, class_name: 'User', inverse_of: :owned_projects
+  belongs_to :billing_owner, class_name: 'User', inverse_of: :owned_projects, optional: true
 
   has_many :project_memberships, dependent: :destroy
   has_many :project_invitations, dependent: :destroy
@@ -31,6 +27,7 @@ class Project < ApplicationRecord
   has_many :ingest_rejections, dependent: :destroy
   has_many :users, through: :project_memberships
 
+  validates :billing_owner, presence: true, on: :create
   validates :name, presence: true
   validates :delivery_timeout_seconds,
             numericality: {
@@ -42,10 +39,22 @@ class Project < ApplicationRecord
   validate :delivery_overrides_require_pro_plan
   validate :retry_delays_must_be_positive_integers
 
-  delegate :plan, to: :billing_owner, allow_nil: true
+  delegate :plan, to: :effective_billing_owner, allow_nil: true
 
   def pro?
     plan == User::PRO_PLAN
+  end
+
+  def effective_billing_owner
+    return billing_owner if billing_owner_id.present? || new_record?
+
+    effective_owner_membership&.user
+  end
+
+  def effective_billing_owner_id
+    return billing_owner_id if billing_owner_id.present? || new_record?
+
+    effective_owner_membership&.user_id
   end
 
   def member?(user)
@@ -59,11 +68,14 @@ class Project < ApplicationRecord
   end
 
   def plan_locked_endpoint_ids
-    endpoints.not_archived.order(:created_at, :id).offset(Plans::Entitlements.endpoint_limit(billing_owner)).pluck(:id)
+    account = effective_billing_owner
+    return [] if account.nil?
+
+    endpoints.not_archived.order(:created_at, :id).offset(Plans::Entitlements.endpoint_limit(account)).pluck(:id)
   end
 
   def owner
-    project_memberships.find_by(role: :owner)&.user
+    effective_owner_membership&.user
   end
 
   def owner?(user)
@@ -73,6 +85,16 @@ class Project < ApplicationRecord
   end
 
   private
+
+  def effective_owner_membership
+    owners = project_memberships.select(&:owner?)
+    if owners.size > 1
+      Rails.logger.error("Project #{id} has #{owners.size} owner memberships; refusing to choose a billing owner")
+      return nil
+    end
+
+    owners.first
+  end
 
   def delivery_overrides_require_pro_plan
     return if pro?

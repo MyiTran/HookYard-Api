@@ -12,7 +12,7 @@ module Api
         )
         pagy, endpoints = paginate(scope)
 
-        endpoints = endpoints.includes(:endpoint_signing_secrets, project: :billing_owner)
+        endpoints = endpoints.includes(:endpoint_signing_secrets, project: [:billing_owner, project_memberships: :user])
 
         render_resource_collection(
           endpoints,

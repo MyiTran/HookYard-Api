@@ -154,6 +154,29 @@ describe 'Projects', type: :request do
       expect(response).to have_http_status(:unauthorized)
     end
 
+    context 'when a legacy project has no billing owner and no owner membership' do
+      let(:legacy) do
+        create(:project).tap do |created|
+          created.update_columns(billing_owner_id: nil)
+          create(:project_membership, project: created, user: maintainer, role: :maintainer)
+        end
+      end
+
+      it 'lists the project without crashing and renders safe plan fields' do
+        legacy
+
+        get '/api/v1/projects', headers: auth_headers(maintainer)
+
+        expect(response).to have_http_status(:ok)
+        entry = JSON.parse(response.body)['data'].first
+        expect(entry['plan']).to be_nil
+        expect(entry['endpoint_limit']).to be_nil
+        expect(entry['monthly_delivery_limit']).to be_nil
+        expect(entry['usage']['deliveries_this_period']).to eq(0)
+        expect(entry['usage']['deliveries_remaining']).to be_nil
+      end
+    end
+
     describe 'pagination' do
       it 'returns the first page with pagination metadata by default' do
         create_list(:project, 3, :with_owner, owner: maintainer)
@@ -242,6 +265,20 @@ describe 'Projects', type: :request do
         expect(many_queries.length).to eq(single_queries.length)
       end
 
+      it 'serializes legacy projects without extra queries per project' do
+        create(:project, :with_owner, owner: maintainer).tap { |legacy| legacy.update_columns(billing_owner_id: nil) }
+
+        single_queries = sql_queries { get '/api/v1/projects', headers: auth_headers(maintainer) }
+
+        create_list(:project, 4, :with_owner, owner: maintainer).each do |legacy|
+          legacy.update_columns(billing_owner_id: nil)
+        end
+        many_queries = sql_queries { get '/api/v1/projects', headers: auth_headers(maintainer) }
+
+        expect(JSON.parse(response.body)['data'].size).to eq(5)
+        expect(many_queries.length).to eq(single_queries.length)
+      end
+
       it 'caps the page size through the shared pagination concern' do
         get '/api/v1/projects', params: { page: { size: 500 } }, headers: auth_headers(maintainer)
 
@@ -306,6 +343,43 @@ describe 'Projects', type: :request do
       expect(body['usage']['deliveries_remaining']).to eq(9_996)
       expect(body['usage']['period_starts_at']).to eq(UserUsagePeriod.period_starts_at.iso8601)
       expect(body['usage']['period_ends_at']).to eq(UserUsagePeriod.period_ends_at.iso8601)
+    end
+
+    it 'renders a legacy project from its owner membership plan' do
+      legacy = create(:project, :with_owner, owner: maintainer)
+      legacy.update_columns(billing_owner_id: nil)
+
+      get "/api/v1/projects/#{legacy.id}", headers: auth_headers(maintainer)
+
+      expect(response).to have_http_status(:ok)
+      body = JSON.parse(response.body)
+      expect(body['plan']).to eq(User::FREE_PLAN)
+      expect(body['endpoint_limit']).to eq(3)
+      expect(body['monthly_delivery_limit']).to eq(10_000)
+    end
+
+    context 'when a legacy project has no billing owner and no owner membership' do
+      let(:legacy) do
+        create(:project).tap do |created|
+          created.update_columns(billing_owner_id: nil)
+          create(:project_membership, project: created, user: maintainer, role: :maintainer)
+        end
+      end
+
+      it 'renders safely without a billing account' do
+        get "/api/v1/projects/#{legacy.id}", headers: auth_headers(maintainer)
+
+        expect(response).to have_http_status(:ok)
+        body = JSON.parse(response.body)
+        expect(body['plan']).to be_nil
+        expect(body['endpoint_limit']).to be_nil
+        expect(body['monthly_delivery_limit']).to be_nil
+        expect(body['usage']).to include(
+          'endpoint_count' => 0,
+          'deliveries_this_period' => 0,
+          'deliveries_remaining' => nil
+        )
+      end
     end
 
     it 'does not advertise unimplemented capabilities as enabled features' do
