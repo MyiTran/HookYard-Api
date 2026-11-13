@@ -4,7 +4,7 @@ class EndpointSerializer < ApplicationSerializer
   fields :name, :url, :description, :active, :event_types, :archived_at, :created_at, :updated_at
 
   field :project do |endpoint|
-    { id: endpoint.project_id, name: endpoint.project.name }
+    { id: endpoint.project_id, name: endpoint.project.name, plan: endpoint.project.plan }
   end
 
   field :has_signing_secret do |endpoint|
@@ -33,6 +33,12 @@ class EndpointSerializer < ApplicationSerializer
       held_message_count: endpoint.held_message_count,
       last_probe: last_probe && CircuitProbeSerializer.render_as_hash(last_probe)
     }
+  end
+
+  field :plan_locked do |endpoint, options|
+    locks = options[:plan_locks]
+
+    locks ? locks.locked?(endpoint) : endpoint.project.plan_locked_endpoint_ids.include?(endpoint.id)
   end
 
   field :queue do |endpoint|

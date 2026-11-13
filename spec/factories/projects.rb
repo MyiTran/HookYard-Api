@@ -1,12 +1,19 @@
 FactoryBot.define do
   factory :project do
+    transient do
+      owner { association(:user) }
+    end
+
     name { Faker::App.name }
+    billing_owner { owner }
+
+    trait :pro do
+      transient do
+        owner { association(:user, :pro) }
+      end
+    end
 
     trait :with_owner do
-      transient do
-        owner { association(:user) }
-      end
-
       after(:create) do |project, evaluator|
         create(:project_membership, project: project, user: evaluator.owner, role: :owner)
       end
