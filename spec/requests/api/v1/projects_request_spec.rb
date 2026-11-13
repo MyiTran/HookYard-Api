@@ -232,7 +232,7 @@ describe 'Projects', type: :request do
 
       it 'serializes the plan usage of every page without extra queries per project' do
         project
-        UserUsagePeriod.reserve_deliveries(user: owner, quantity: 1, limit: 10_000)
+        UserUsagePeriod.reserve_deliveries!(user: owner, quantity: 1, limit: 10_000)
 
         single_queries = sql_queries { get '/api/v1/projects', headers: auth_headers(maintainer) }
         create_list(:project, 4, :with_owner, owner: maintainer)
@@ -293,7 +293,7 @@ describe 'Projects', type: :request do
 
     it 'renders the plan limits and the metered usage of the current period' do
       create(:endpoint, project: project)
-      UserUsagePeriod.reserve_deliveries(user: owner, quantity: 4, limit: 10_000)
+      UserUsagePeriod.reserve_deliveries!(user: owner, quantity: 4, limit: 10_000)
 
       get "/api/v1/projects/#{project.id}", headers: auth_headers(maintainer)
 
@@ -319,7 +319,7 @@ describe 'Projects', type: :request do
     end
 
     it 'never reports a negative remaining usage' do
-      UserUsagePeriod.reserve_deliveries(
+      UserUsagePeriod.reserve_deliveries!(
         user: owner,
         quantity: Plans::Entitlements.monthly_delivery_limit(owner) + 5,
         limit: Plans::Entitlements.monthly_delivery_limit(owner) + 5
@@ -347,7 +347,7 @@ describe 'Projects', type: :request do
 
     it 'reports the metered usage of the billing account across its projects' do
       sibling_project = create(:project, :with_owner, owner: owner)
-      UserUsagePeriod.reserve_deliveries(user: owner, quantity: 6, limit: 10_000)
+      UserUsagePeriod.reserve_deliveries!(user: owner, quantity: 6, limit: 10_000)
 
       get "/api/v1/projects/#{sibling_project.id}", headers: auth_headers(owner)
 

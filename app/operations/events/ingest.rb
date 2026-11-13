@@ -75,7 +75,7 @@ module Events
       account = project.billing_owner
       limit = Plans::Entitlements.monthly_delivery_limit(account)
 
-      return if UserUsagePeriod.reserve_deliveries(user: account, quantity: deliveries, limit: limit, at: now)
+      return if UserUsagePeriod.reserve_deliveries!(user: account, quantity: deliveries, limit: limit, at: now)
 
       raise ApiError::PlanLimitExceededError.new(
         message: "The #{account.plan} plan allows at most #{limit} deliveries per month",

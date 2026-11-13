@@ -369,7 +369,7 @@ describe Events::Ingest, type: :operation do
         before do
           described_class.call(project: project, attributes: attributes)
           limit = Plans::Entitlements.monthly_delivery_limit(account)
-          UserUsagePeriod.reserve_deliveries(user: account, quantity: limit - 1, limit: limit)
+          UserUsagePeriod.reserve_deliveries!(user: account, quantity: limit - 1, limit: limit)
         end
 
         it 'returns the accepted event instead of a payment required error' do
@@ -386,7 +386,7 @@ describe Events::Ingest, type: :operation do
       let(:limit) { Plans::Entitlements.monthly_delivery_limit(account) }
 
       before do
-        UserUsagePeriod.reserve_deliveries(user: account, quantity: limit, limit: limit)
+        UserUsagePeriod.reserve_deliveries!(user: account, quantity: limit, limit: limit)
       end
 
       it 'rejects the event with a payment required error' do
@@ -442,14 +442,14 @@ describe Events::Ingest, type: :operation do
       let(:just_before_boundary) { boundary - 1.second }
 
       before do
-        UserUsagePeriod.reserve_deliveries(
+        UserUsagePeriod.reserve_deliveries!(
           user: account, quantity: limit, limit: limit, at: just_before_boundary
         )
       end
 
       it 'reports the usage and reset time of the period the request started in' do
         travel_to(just_before_boundary) do
-          allow(UserUsagePeriod).to receive(:reserve_deliveries).and_wrap_original do |original, **kwargs|
+          allow(UserUsagePeriod).to receive(:reserve_deliveries!).and_wrap_original do |original, **kwargs|
             original.call(**kwargs).tap { travel(1.second) }
           end
 
@@ -467,7 +467,7 @@ describe Events::Ingest, type: :operation do
     context 'when the remaining monthly quota is smaller than the fan out' do
       before do
         limit = Plans::Entitlements.monthly_delivery_limit(account)
-        UserUsagePeriod.reserve_deliveries(user: account, quantity: limit - 1, limit: limit)
+        UserUsagePeriod.reserve_deliveries!(user: account, quantity: limit - 1, limit: limit)
         create(:endpoint, project: project, event_types: [Endpoint::WILDCARD_EVENT_TYPE])
       end
 
@@ -484,7 +484,7 @@ describe Events::Ingest, type: :operation do
 
       before do
         free_limit = Plans::Entitlements.definition_for(User::FREE_PLAN).monthly_delivery_limit
-        UserUsagePeriod.reserve_deliveries(user: account, quantity: free_limit, limit: free_limit)
+        UserUsagePeriod.reserve_deliveries!(user: account, quantity: free_limit, limit: free_limit)
       end
 
       it 'still meters and accepts deliveries beyond the free limit' do

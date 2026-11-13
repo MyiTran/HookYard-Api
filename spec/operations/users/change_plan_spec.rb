@@ -87,7 +87,7 @@ describe Users::ChangePlan, type: :operation do
       it 'blocks new deliveries once the free monthly limit is consumed' do
         endpoints.first.update!(event_types: [Endpoint::WILDCARD_EVENT_TYPE])
         free_limit = Plans::Entitlements.definition_for(User::FREE_PLAN).monthly_delivery_limit
-        UserUsagePeriod.reserve_deliveries(user: account, quantity: free_limit, limit: free_limit)
+        UserUsagePeriod.reserve_deliveries!(user: account, quantity: free_limit, limit: free_limit)
         described_class.call(user: account, plan: User::FREE_PLAN)
 
         expect { Events::Ingest.call(project: project, attributes: { event_type: 'order.created', payload: {}, idempotency_key: 'key-1' }) }

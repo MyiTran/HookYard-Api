@@ -192,7 +192,7 @@ describe 'Events', type: :request do
       before do
         create(:endpoint, project: project, event_types: ['order.created'])
         limit = Plans::Entitlements.monthly_delivery_limit(project.billing_owner)
-        UserUsagePeriod.reserve_deliveries(user: project.billing_owner, quantity: limit, limit: limit)
+        UserUsagePeriod.reserve_deliveries!(user: project.billing_owner, quantity: limit, limit: limit)
       end
 
       it 'rejects the event with a payment required contract' do
