@@ -85,6 +85,8 @@ class Message < ApplicationRecord
   validates :attempt_count, numericality: { only_integer: true, greater_than_or_equal_to: 0 }
   validate :event_and_endpoint_share_project
 
+  after_commit :broadcast_delivery_change, on: :update
+
   def self.delivery_state_scope(state)
     scope_name = DELIVERY_STATE_SCOPES[state.to_s]
     scope_name ? public_send(scope_name) : nil
@@ -196,6 +198,16 @@ class Message < ApplicationRecord
   end
 
   private
+
+  def broadcast_delivery_change
+    return unless delivery_visibility_changed?
+
+    ProjectRealtimeChannel.message_changed(self)
+  end
+
+  def delivery_visibility_changed?
+    saved_change_to_status? || saved_change_to_held_at? || saved_change_to_next_retry_at?
+  end
 
   def finish!(status:, at:)
     update!(

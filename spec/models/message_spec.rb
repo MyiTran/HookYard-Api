@@ -283,6 +283,69 @@ describe Message, type: :model do
     end
   end
 
+  describe 'delivery realtime broadcast' do
+    let(:stream) { ProjectRealtimeChannel.stream_name(project.id) }
+
+    before { clear_cable_messages(stream) }
+
+    it 'broadcasts the terminal state when the delivery succeeds' do
+      message.mark_succeeded!
+
+      expect(cable_messages(stream)).to contain_exactly(
+        include(
+          'type' => 'message.changed',
+          'project_id' => project.id,
+          'endpoint_id' => endpoint.id,
+          'message_id' => message.id,
+          'status' => 'succeeded',
+          'delivery_state' => 'terminal'
+        )
+      )
+    end
+
+    it 'broadcasts the scheduled retry state when a retry is planned' do
+      message.schedule_retry!(at: 5.minutes.from_now)
+
+      expect(cable_messages(stream)).to contain_exactly(
+        include('type' => 'message.changed', 'status' => 'pending', 'delivery_state' => 'scheduled_retry')
+      )
+    end
+
+    it 'broadcasts the held state when the message is held by the circuit' do
+      message.hold!(reason: 'endpoint_circuit_open')
+
+      expect(cable_messages(stream)).to contain_exactly(
+        include('type' => 'message.changed', 'status' => 'pending', 'delivery_state' => 'held_by_circuit')
+      )
+    end
+
+    it 'broadcasts the failed terminal state' do
+      message.mark_failed!
+
+      expect(cable_messages(stream)).to contain_exactly(
+        include('type' => 'message.changed', 'status' => 'failed', 'delivery_state' => 'terminal')
+      )
+    end
+
+    it 'does not broadcast when the delivery visibility does not change' do
+      message.update!(attempt_count: 1)
+
+      expect(cable_messages(stream)).to be_empty
+    end
+
+    it 'does not broadcast when the transaction is rolled back' do
+      message
+
+      ActiveRecord::Base.transaction(requires_new: true) do
+        message.mark_succeeded!
+        raise ActiveRecord::Rollback
+      end
+
+      expect(message.reload).to be_pending
+      expect(cable_messages(stream)).to be_empty
+    end
+  end
+
   describe 'concurrent terminal transitions' do
     self.use_transactional_tests = false
 

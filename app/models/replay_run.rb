@@ -41,6 +41,9 @@ class ReplayRun < ApplicationRecord
   validates :mode, inclusion: { in: MODES }
   validates :requested_count, numericality: { only_integer: true, greater_than_or_equal_to: 0 }
 
+  after_commit :broadcast_replay_run_created, on: :create
+  after_commit :broadcast_replay_run_materialized, on: :update
+
   def self.normalized_filters(filters)
     filters.to_h.stringify_keys.slice(*FILTER_KEYS).compact_blank
   end
@@ -50,6 +53,16 @@ class ReplayRun < ApplicationRecord
   end
 
   private
+
+  def broadcast_replay_run_created
+    ProjectRealtimeChannel.replay_changed(project_id: project_id, replay_run_id: id)
+  end
+
+  def broadcast_replay_run_materialized
+    return unless saved_change_to_materialized_at? && materialized_at.present?
+
+    ProjectRealtimeChannel.replay_changed(project_id: project_id, replay_run_id: id)
+  end
 
   def build_progress
     counts = replay_items.group(:status).count

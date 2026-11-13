@@ -521,4 +521,44 @@ describe Endpoint, type: :model do
       expect(endpoint.circuit_failure_count).to eq(1)
     end
   end
+
+  describe 'circuit realtime broadcast' do
+    let(:endpoint) { create(:endpoint) }
+    let(:stream) { ProjectRealtimeChannel.stream_name(endpoint.project_id) }
+
+    before { clear_cable_messages(stream) }
+
+    it 'broadcasts the open circuit state' do
+      endpoint.open_circuit!
+
+      expect(cable_messages(stream)).to contain_exactly(
+        include('type' => 'endpoint.changed', 'endpoint_id' => endpoint.id, 'circuit_state' => 'circuit_open')
+      )
+    end
+
+    it 'broadcasts the enabled state when the circuit closes' do
+      endpoint.open_circuit!
+      clear_cable_messages(stream)
+
+      endpoint.close_circuit!
+
+      expect(cable_messages(stream)).to contain_exactly(
+        include('type' => 'endpoint.changed', 'endpoint_id' => endpoint.id, 'circuit_state' => 'enabled')
+      )
+    end
+
+    it 'broadcasts the disabled state' do
+      endpoint.disable_circuit!
+
+      expect(cable_messages(stream)).to contain_exactly(
+        include('type' => 'endpoint.changed', 'endpoint_id' => endpoint.id, 'circuit_state' => 'disabled')
+      )
+    end
+
+    it 'does not broadcast when the circuit state does not change' do
+      endpoint.update!(name: 'Renamed endpoint')
+
+      expect(cable_messages(stream)).to be_empty
+    end
+  end
 end

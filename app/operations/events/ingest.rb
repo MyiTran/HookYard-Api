@@ -21,12 +21,19 @@ module Events
     def call(project:, attributes:)
       attributes = attributes.to_h.symbolize_keys
       event, message_ids, created = accept(project, attributes)
+      broadcast_fan_out(event) if created
       Messages::EnqueueDelivery.call(message_ids: deliverable_message_ids(event))
 
       Result.new(event: event, created: created, message_ids: message_ids)
     end
 
     private
+
+    def broadcast_fan_out(event)
+      event.messages.select(:endpoint_id).distinct.pluck(:endpoint_id).each do |endpoint_id|
+        ProjectRealtimeChannel.endpoint_messages_changed(event.project_id, endpoint_id)
+      end
+    end
 
     def deliverable_message_ids(event)
       event.messages.pending.not_held.pluck(:id)

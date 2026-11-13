@@ -84,6 +84,8 @@ class ReplayItem < ApplicationRecord
   validate :skip_reason_matches_status
   validate :endpoint_matches_message
 
+  after_commit :broadcast_replay_change, on: %i[create update]
+
   def active?
     ACTIVE_STATUSES.include?(status)
   end
@@ -149,6 +151,18 @@ class ReplayItem < ApplicationRecord
   end
 
   private
+
+  def broadcast_replay_change
+    return unless saved_change_to_status?
+
+    ProjectRealtimeChannel.replay_changed(
+      project_id: replay_run.project_id,
+      replay_run_id: replay_run_id,
+      replay_item_id: id,
+      endpoint_id: endpoint_id,
+      message_id: message_id
+    )
+  end
 
   def hold_reason_matches_status
     if held?

@@ -65,6 +65,8 @@ class Endpoint < ApplicationRecord
   validate :url_must_be_http
   validate :event_types_must_be_consistent
 
+  after_commit :broadcast_circuit_change, on: :update
+
   def archived?
     archived_at.present?
   end
@@ -229,6 +231,12 @@ class Endpoint < ApplicationRecord
   end
 
   private
+
+  def broadcast_circuit_change
+    return unless saved_change_to_circuit_state?
+
+    ProjectRealtimeChannel.endpoint_circuit_changed(self)
+  end
 
   def next_signing_secret_version
     (endpoint_signing_secrets.maximum(:version) || 0) + 1

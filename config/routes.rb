@@ -1,4 +1,5 @@
 Rails.application.routes.draw do
+  mount ActionCable.server => '/cable'
   mount Sidekiq::Web => '/sidekiq'
 
   if ENV['APP_DOCUMENT'].present?

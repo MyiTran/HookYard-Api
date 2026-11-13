@@ -24,6 +24,17 @@ describe Events::Ingest, type: :operation do
       expect(@result.messages_count).to eq(1)
     end
 
+    it 'broadcasts a message.changed signal for each fanned out endpoint' do
+      stream = ProjectRealtimeChannel.stream_name(project.id)
+      clear_cable_messages(stream)
+
+      described_class.call(project: project, attributes: attributes)
+
+      expect(cable_messages(stream)).to contain_exactly(
+        include('type' => 'message.changed', 'project_id' => project.id, 'endpoint_id' => endpoint.id)
+      )
+    end
+
     it 'keeps the committed event and messages waiting when enqueueing fails' do
       allow(Messages::DeliverJob).to receive(:perform_later).and_raise(StandardError, 'redis unavailable')
       allow(Rails.logger).to receive(:error).and_call_original
