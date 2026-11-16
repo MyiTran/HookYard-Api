@@ -21,3 +21,9 @@ recover_pending_webhook_deliveries:
   class: 'Messages::PendingDeliveryRecoveryJob'
   queue: default
   active_job: true
+
+purge_delivery_attempt_bodies:
+  cron: '30 2 * * *'
+  class: 'DeliveryAttempts::PurgeBodiesJob'
+  queue: low
+  active_job: true

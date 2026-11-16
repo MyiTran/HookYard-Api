@@ -40,6 +40,8 @@ Rails.application.routes.draw do
 
       resources :messages, only: %i[index]
 
+      resources :ingest_rejections, only: %i[index]
+
       resources :notifications, only: %i[index] do
         patch :read, on: :member
         patch :read_all, on: :collection
@@ -57,6 +59,7 @@ Rails.application.routes.draw do
             resources :messages, only: %i[index]
           end
           resources :messages, only: %i[show]
+          resources :ingest_rejections, only: %i[index]
           resources :api_credentials, only: %i[index create] do
             post :revoke, on: :member
           end
@@ -76,6 +79,8 @@ Rails.application.routes.draw do
         resources :accounts, only: [] do
           patch :plan, on: :member
         end
+
+        resources :ingest_rejections, only: %i[index]
       end
 
       resources :blobs, param: :signed_id, only: %i[create show]

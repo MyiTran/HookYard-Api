@@ -68,6 +68,12 @@ describe 'Sidekiq cron schedule', type: :model do
           'queue' => 'default',
           'active_job' => true
         },
+        'purge_delivery_attempt_bodies' => {
+          'cron' => '30 2 * * *',
+          'class' => 'DeliveryAttempts::PurgeBodiesJob',
+          'queue' => 'low',
+          'active_job' => true
+        },
         'purge_expired_jwts_job' => {
           'cron' => '0 0 * * *',
           'class' => 'DeviseJwt::PurgeExpiredJwtsJob',

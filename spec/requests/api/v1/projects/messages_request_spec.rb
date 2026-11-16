@@ -234,14 +234,13 @@ describe 'Projects::Messages', type: :request do
       expect(headers).to include('content-type' => 'application/json', 'webhook-id' => message.webhook_id)
     end
 
-    it 'returns the persisted capped response body' do
+    it 'redacts a non-json response body from the message detail' do
       create(:delivery_attempt, message: message, attempt_number: 1, response_status: 200,
                                 response_body: DeliveryAttempt.truncate_response_body('a' * 5000))
 
       get message_path(project.id, message.id), headers: auth_headers(maintainer)
 
-      expect(JSON.parse(response.body)['attempts'].first['response_body'].bytesize)
-        .to eq(DeliveryAttempt::RESPONSE_BODY_MAX_BYTES)
+      expect(JSON.parse(response.body)['attempts'].first['response_body']).to be_nil
     end
 
     it 'does not expose a message from another project' do

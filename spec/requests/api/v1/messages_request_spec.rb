@@ -162,6 +162,35 @@ describe 'Messages', type: :request do
         expect(JSON.parse(response.body)['data'].map { |entry| entry['id'] }).to eq([message.id])
       end
 
+      it 'finds messages by their exact message id' do
+        other = create(:message, project: project)
+
+        get '/api/v1/messages', params: { message_id: other.id }, headers: auth_headers(user)
+
+        expect(JSON.parse(response.body)['data'].map { |entry| entry['id'] }).to contain_exactly(other.id)
+      end
+
+      it 'finds messages by an exact request id without duplicates' do
+        message = create(:message, event: event, endpoint: endpoint)
+        create(:delivery_attempt, message: message, attempt_number: 1, request_id: 'req-lookup')
+        create(:delivery_attempt, message: message, attempt_number: 2, request_id: 'req-lookup')
+
+        get '/api/v1/messages', params: { request_id: 'req-lookup' }, headers: auth_headers(user)
+
+        expect(JSON.parse(response.body)['data'].map { |entry| entry['id'] }).to contain_exactly(message.id)
+        expect(JSON.parse(response.body)['meta']['total_count']).to eq(1)
+      end
+
+      it 'does not let the request id search leak messages from another project' do
+        outsider_project = create(:project, :with_owner, owner: create(:user))
+        outsider_message = create(:message, project: outsider_project)
+        create(:delivery_attempt, message: outsider_message, request_id: 'req-outsider')
+
+        get '/api/v1/messages', params: { request_id: 'req-outsider' }, headers: auth_headers(user)
+
+        expect(JSON.parse(response.body)['data']).to be_empty
+      end
+
       it 'filters by project, endpoint, status and event type together' do
         other_endpoint = create(:endpoint, project: project)
         visible = create(:message, event: event, endpoint: endpoint, status: :failed)
@@ -446,6 +475,93 @@ describe 'Messages', type: :request do
         expect(json_response['status']).to eq('succeeded')
         expect(json_response['terminal_at']).to be_present
         expect(json_response['retryable']).to be(false)
+      end
+
+      it 'redacts credential headers, timing headers and secret query values from the evidence' do
+        message = create(:message, event: event, endpoint: endpoint)
+        create(
+          :delivery_attempt,
+          message: message,
+          response_status: 200,
+          request_url: 'https://hooks.test/path?token=secret-token&tenant=acme',
+          request_headers: {
+            'content-type' => 'application/json',
+            'webhook-signature' => 'v1,secret-signature',
+            'authorization' => 'Bearer secret-bearer'
+          },
+          response_headers: {
+            'content-type' => 'application/json',
+            'server-timing' => 'sql;dur=12',
+            'set-cookie' => 'session=1'
+          }
+        )
+
+        get "/api/v1/projects/#{project.id}/messages/#{message.id}", headers: auth_headers(user)
+
+        attempt = json_response['attempts'].first
+        expect(attempt['request_url']).to eq('https://hooks.test/path?token=[REDACTED]&tenant=acme')
+        expect(attempt['request_headers']).to eq('content-type' => 'application/json')
+        expect(attempt['response_headers']).to eq('content-type' => 'application/json')
+        expect(response.body).not_to include('secret-token', 'secret-signature', 'secret-bearer', 'server-timing')
+      end
+
+      it 'redacts secrets inside the JSON request and response bodies' do
+        message = create(:message, event: event, endpoint: endpoint)
+        create(
+          :delivery_attempt,
+          message: message,
+          response_status: 200,
+          request_body: {
+            'id' => 'evt_1',
+            'token' => 'request-token-value',
+            'data' => { 'password' => 'request-password', 'order_id' => 'order_1' }
+          }.to_json,
+          response_body: { 'access_token' => 'response-token-value', 'ok' => true }.to_json
+        )
+
+        get "/api/v1/projects/#{project.id}/messages/#{message.id}", headers: auth_headers(user)
+
+        attempt = json_response['attempts'].first
+        expect(JSON.parse(attempt['request_body'])).to eq(
+          'id' => 'evt_1',
+          'token' => '[REDACTED]',
+          'data' => { 'password' => '[REDACTED]', 'order_id' => 'order_1' }
+        )
+        expect(JSON.parse(attempt['response_body'])).to eq(
+          'access_token' => '[REDACTED]', 'ok' => true
+        )
+        expect(response.body).not_to include('request-token-value', 'request-password', 'response-token-value')
+      end
+
+      it 'marks a body removed by retention instead of reporting a missing body' do
+        message = create(:message, event: event, endpoint: endpoint)
+        purged_at = Time.zone.local(2026, 11, 1, 2, 30, 0)
+        create(
+          :delivery_attempt,
+          message: message,
+          attempt_number: 1,
+          response_status: 200,
+          request_body: nil,
+          response_body: nil,
+          bodies_purged_at: purged_at
+        )
+        create(
+          :delivery_attempt,
+          message: message,
+          attempt_number: 2,
+          error_type: 'Net::ReadTimeout',
+          error_message: 'execution expired'
+        )
+
+        get "/api/v1/projects/#{project.id}/messages/#{message.id}", headers: auth_headers(user)
+
+        purged, timed_out = json_response['attempts']
+        expect(purged['bodies_purged_at']).to be_present
+        expect(purged['request_body']).to be_nil
+        expect(purged['response_body']).to be_nil
+        expect(purged['response_status']).to eq(200)
+        expect(timed_out['bodies_purged_at']).to be_nil
+        expect(timed_out['response_body']).to be_nil
       end
     end
 

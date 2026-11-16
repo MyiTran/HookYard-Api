@@ -1,8 +1,6 @@
 class MessagesQuery < ApplicationQuery
   include MessageAttemptSummary
 
-  UUID_FORMAT = /\A\h{8}-\h{4}-\h{4}-\h{4}-\h{12}\z/
-
   ORDERS = {
     'created_desc' => { created_at: :desc, id: :desc },
     'created_asc' => { created_at: :asc, id: :asc }
@@ -14,6 +12,8 @@ class MessagesQuery < ApplicationQuery
     scope = with_attempt_summary(scope).preload(:event, :endpoint, endpoint: :project)
 
     scope = filter(scope, :by_search, params[:q])
+    scope = filter(scope, :by_message_id, params[:message_id])
+    scope = filter(scope, :by_request_id, params[:request_id])
     scope = filter(scope, :by_project, params[:project_id])
     scope = filter(scope, :by_endpoint, params[:endpoint_id])
     scope = filter(scope, :by_status, params[:status])
@@ -39,6 +39,20 @@ class MessagesQuery < ApplicationQuery
       'WHERE delivery_attempts.message_id = messages.id AND delivery_attempts.request_id ILIKE :pattern)',
       pattern: pattern
     )
+  end
+
+  def by_message_id(scope, value)
+    normalized = identifier_value(value, 'msg_')
+    return scope.none unless normalized.match?(UUID_FORMAT)
+
+    scope.where(id: normalized)
+  end
+
+  def by_request_id(scope, value)
+    identifiers = identifier_candidates(value, 'req_')
+    return scope if identifiers.empty?
+
+    scope.where(id: DeliveryAttempt.where(request_id: identifiers).select(:message_id))
   end
 
   def by_project(scope, project_id)
@@ -91,13 +105,14 @@ class MessagesQuery < ApplicationQuery
     scope.order(ORDERS.fetch(value.to_s, ORDERS.fetch(DEFAULT_ORDER)))
   end
 
-  def valid_uuid?(value)
-    value.to_s.match?(UUID_FORMAT)
+  def identifier_value(value, prefix)
+    value.to_s.strip.delete_prefix(prefix)
   end
 
-  def parsed_time(value)
-    Time.zone.parse(value.to_s)
-  rescue ArgumentError
-    nil
+  def identifier_candidates(value, prefix)
+    raw = value.to_s.strip
+    return [] if raw.blank?
+
+    [raw, "#{prefix}#{identifier_value(raw, prefix)}"].uniq
   end
 end

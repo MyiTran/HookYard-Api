@@ -4,11 +4,12 @@
 #
 #  id                     :uuid             not null, primary key
 #  attempt_number         :integer          default(1), not null
+#  bodies_purged_at       :datetime
 #  duration_ms            :integer
 #  error_message          :text
 #  error_type             :string
 #  http_method            :string           default("POST"), not null
-#  request_body           :text             not null
+#  request_body           :text
 #  request_headers        :jsonb            not null
 #  request_url            :text             not null
 #  response_body          :text
@@ -24,9 +25,11 @@
 #
 # Indexes
 #
+#  index_delivery_attempts_on_bodies_pending_purge           (created_at) WHERE ((bodies_purged_at IS NULL) AND ((response_status IS NOT NULL) OR (error_type IS NOT NULL)))
 #  index_delivery_attempts_on_message_id                     (message_id)
 #  index_delivery_attempts_on_message_id_and_attempt_number  (message_id,attempt_number) UNIQUE
 #  index_delivery_attempts_on_message_id_and_created_at      (message_id,created_at)
+#  index_delivery_attempts_on_request_id                     (request_id)
 #
 # Foreign Keys
 #
@@ -52,7 +55,8 @@ class DeliveryAttempt < ApplicationRecord
 
   validates :attempt_number, presence: true, numericality: { only_integer: true, greater_than: 0 }
   validates :attempt_number, uniqueness: { scope: :message_id }
-  validates :request_id, :webhook_id, :request_url, :http_method, :request_body, presence: true
+  validates :request_id, :webhook_id, :request_url, :http_method, presence: true
+  validates :request_body, presence: true, unless: :bodies_purged?
   validates :signing_secret_version, presence: true, numericality: { only_integer: true, greater_than: 0 }
   validates :signed_at, presence: true
   validate :evidence_is_immutable, on: :update
@@ -67,6 +71,10 @@ class DeliveryAttempt < ApplicationRecord
 
   def completed?
     response_status.present? || error_type.present?
+  end
+
+  def bodies_purged?
+    bodies_purged_at.present?
   end
 
   def status

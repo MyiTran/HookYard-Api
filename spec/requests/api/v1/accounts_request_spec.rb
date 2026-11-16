@@ -15,6 +15,7 @@ describe 'Accounts', type: :request do
       expect(body['project_limit']).to eq(2)
       expect(body['endpoint_limit_per_project']).to eq(3)
       expect(body['monthly_delivery_limit']).to eq(10_000)
+      expect(body['body_retention_days']).to eq(3)
       expect(body['usage']).to include(
         'project_count' => 0,
         'deliveries_this_period' => 0,
@@ -34,6 +35,7 @@ describe 'Accounts', type: :request do
       expect(body['project_limit']).to eq(10)
       expect(body['endpoint_limit_per_project']).to eq(50)
       expect(body['monthly_delivery_limit']).to eq(500_000)
+      expect(body['body_retention_days']).to eq(30)
     end
 
     it 'returns the own plan and usage of an account that only belongs to another owner project' do
@@ -69,13 +71,13 @@ describe 'Accounts', type: :request do
       expect(available_plans).to eq(
         [
           { 'plan' => User::FREE_PLAN, 'project_limit' => 2, 'endpoint_limit_per_project' => 3,
-            'monthly_delivery_limit' => 10_000 },
+            'monthly_delivery_limit' => 10_000, 'body_retention_days' => 3 },
           { 'plan' => User::PRO_PLAN, 'project_limit' => 10, 'endpoint_limit_per_project' => 50,
-            'monthly_delivery_limit' => 500_000 }
+            'monthly_delivery_limit' => 500_000, 'body_retention_days' => 30 }
         ]
       )
       expect(available_plans.first.keys).to contain_exactly(
-        'plan', 'project_limit', 'endpoint_limit_per_project', 'monthly_delivery_limit'
+        'plan', 'project_limit', 'endpoint_limit_per_project', 'monthly_delivery_limit', 'body_retention_days'
       )
     end
 

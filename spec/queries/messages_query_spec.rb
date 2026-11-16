@@ -212,4 +212,47 @@ describe MessagesQuery do
     end
   end
   end
+
+  describe 'exact identifier search' do
+    let!(:message) { new_message }
+    let!(:attempt) { create(:delivery_attempt, message: message, request_id: 'req_exact-123') }
+
+    it 'finds a message by its exact id' do
+      expect(results(message_id: message.id)).to contain_exactly(message)
+    end
+
+    it 'accepts the webhook message id prefix' do
+      expect(results(message_id: "msg_#{message.id}")).to contain_exactly(message)
+    end
+
+    it 'does not match a partial message id' do
+      expect(results(message_id: message.id[0, 8])).to be_empty
+    end
+
+    it 'finds a message by its exact request id' do
+      expect(results(request_id: attempt.request_id)).to contain_exactly(message)
+    end
+
+    it 'accepts a request id without the req prefix' do
+      expect(results(request_id: 'exact-123')).to contain_exactly(message)
+    end
+
+    it 'does not match a partial request id' do
+      expect(results(request_id: 'exact')).to be_empty
+    end
+
+    it 'returns a message once even when several attempts share the request id' do
+      create(:delivery_attempt, message: message, attempt_number: 2, request_id: 'req-shared')
+      create(:delivery_attempt, message: message, attempt_number: 3, request_id: 'req-shared')
+
+      expect(results(request_id: 'req-shared')).to contain_exactly(message)
+    end
+
+    it 'returns a message once when the free text search matches several attempts' do
+      create(:delivery_attempt, message: message, attempt_number: 2, request_id: 'req-abc-shared')
+      create(:delivery_attempt, message: message, attempt_number: 3, request_id: 'req-abc-shared')
+
+      expect(results(q: 'abc-shared')).to contain_exactly(message)
+    end
+  end
 end
