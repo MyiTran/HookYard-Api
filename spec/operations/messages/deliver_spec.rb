@@ -48,6 +48,16 @@ describe Messages::Deliver, type: :operation do
     active_message
   end
 
+  describe 'delivery usage metering' do
+    it 'does not charge the monthly delivery quota for delivery retries' do
+      deliver(http_result(status: 503))
+
+      expect(message.reload.status).to eq('pending')
+      expect(message.next_retry_at).to be_present
+      expect(project.billing_owner.deliveries_used_in_period).to eq(0)
+    end
+  end
+
   describe '.call' do
     it 'delivers through the public operation api with the default dependencies' do
       allow(Webhooks::HttpClient).to receive(:new).and_return(http_client)
@@ -577,7 +587,8 @@ describe Messages::Deliver, type: :operation do
     end
 
     it 'uses the configured pro plan timeout' do
-      project.update!(plan: 'pro', delivery_timeout_seconds: 30)
+      project.billing_owner.update!(plan: User::PRO_PLAN)
+      project.update!(delivery_timeout_seconds: 30)
       allow(http_client).to receive(:post).and_return(http_result(status: 200))
 
       operation.call(message: message)
@@ -586,7 +597,8 @@ describe Messages::Deliver, type: :operation do
     end
 
     it 'uses the configured pro plan retry delays' do
-      project.update!(plan: 'pro', delivery_retry_delays_seconds: [3])
+      project.billing_owner.update!(plan: User::PRO_PLAN)
+      project.update!(delivery_retry_delays_seconds: [3])
       allow(http_client).to receive(:post).and_return(http_result(status: 503))
 
       operation.call(message: message)

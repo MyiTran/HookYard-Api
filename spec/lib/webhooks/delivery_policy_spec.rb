@@ -82,7 +82,7 @@ describe Webhooks::DeliveryPolicy, type: :model do
 
     context 'when the tenant is on the free plan' do
       it 'uses the fixed default schedule' do
-        project = build(:project, plan: 'free')
+        project = build(:project)
         with_jitter(0.0)
 
         expect(described_class.retry_delays_for(project)).to eq(described_class::RETRY_DELAYS)
@@ -92,7 +92,7 @@ describe Webhooks::DeliveryPolicy, type: :model do
 
     context 'when the tenant is on the pro plan' do
       it 'uses the configured retry delays' do
-        project = build(:project, plan: Project::PRO_PLAN, delivery_retry_delays_seconds: [10, 20, 40, 80, 160, 320, 640])
+        project = build(:project, :pro, delivery_retry_delays_seconds: [10, 20, 40, 80, 160, 320, 640])
         with_jitter(0.0)
 
         expect(described_class.retry_delays_for(project)).to eq([10, 20, 40, 80, 160, 320, 640].map(&:seconds))
@@ -115,7 +115,7 @@ describe Webhooks::DeliveryPolicy, type: :model do
 
     context 'when the tenant is on the free plan' do
       it 'keeps the fixed schedule even if override columns were persisted' do
-        project = build(:project, plan: 'free')
+        project = build(:project)
         project.delivery_retry_delays_seconds = [120, 120, 120]
 
         expect(described_class.attempt_offsets(project: project))
@@ -126,7 +126,7 @@ describe Webhooks::DeliveryPolicy, type: :model do
 
   describe '.timeout_seconds_for' do
     it 'defaults the free plan to fifteen seconds and ignores persisted override columns' do
-      project = build(:project, plan: 'free')
+      project = build(:project)
       project.delivery_timeout_seconds = 30
 
       expect(described_class.timeout_seconds_for(project)).to eq(15)
@@ -135,13 +135,13 @@ describe Webhooks::DeliveryPolicy, type: :model do
     end
 
     it 'returns the configured timeout for the pro plan' do
-      project = build(:project, plan: Project::PRO_PLAN, delivery_timeout_seconds: 25)
+      project = build(:project, :pro, delivery_timeout_seconds: 25)
 
       expect(described_class.timeout_seconds_for(project)).to eq(25)
     end
 
     it 'falls back to the default when the pro plan has no override' do
-      expect(described_class.timeout_seconds_for(build(:project, plan: Project::PRO_PLAN))).to eq(15)
+      expect(described_class.timeout_seconds_for(build(:project, :pro))).to eq(15)
     end
   end
 

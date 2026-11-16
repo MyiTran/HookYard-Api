@@ -32,6 +32,10 @@ Rails.application.routes.draw do
 
       resource :cable_ticket, only: %i[create]
 
+      resource :account, only: %i[show] do
+        patch :plan
+      end
+
       resources :events, only: %i[create]
 
       resources :messages, only: %i[index]
@@ -68,6 +72,10 @@ Rails.application.routes.draw do
 
       namespace :admin do
         resource :dashboard, only: %i[show]
+
+        resources :accounts, only: [] do
+          patch :plan, on: :member
+        end
       end
 
       resources :blobs, param: :signed_id, only: %i[create show]

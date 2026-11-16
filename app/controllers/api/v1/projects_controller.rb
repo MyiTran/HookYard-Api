@@ -10,11 +10,13 @@ module Api
           order: params[:order]
         )
         pagy, projects = paginate(projects_scope)
+        projects = projects.includes(:billing_owner, project_memberships: :user)
 
         render_resource_collection(
-          projects.includes(:project_memberships),
+          projects,
           each_serializer: ProjectSerializer,
           current_user: current_user,
+          usage_summary: ProjectUsageSummary.new(projects),
           pagy: pagy
         )
       end

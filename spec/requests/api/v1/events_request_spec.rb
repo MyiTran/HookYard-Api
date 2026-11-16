@@ -128,6 +128,24 @@ describe 'Events', type: :request do
       expect(response).to have_http_status(:unprocessable_entity)
     end
 
+    context 'when the project has no billing owner and no owner membership' do
+      let(:legacy) { create(:project).tap { |created| created.update_columns(billing_owner_id: nil) } }
+      let(:legacy_raw_token) { ProjectApiCredential.generate_token }
+
+      before { create(:project_api_credential, project: legacy, raw_token: legacy_raw_token) }
+
+      it 'rejects the event with a controlled error instead of failing' do
+        post '/api/v1/events',
+             params: event_attributes,
+             headers: { 'Authorization' => "Bearer #{legacy_raw_token}" },
+             as: :json
+
+        expect(response).to have_http_status(:unprocessable_entity)
+        expect(JSON.parse(response.body)['message']).to eq('Project has no billing owner')
+        expect(Event.where(project: legacy).count).to eq(0)
+      end
+    end
+
     context 'when an eligible endpoint queue is full' do
       let(:endpoint) { create(:endpoint, project: project, event_types: ['order.created']) }
 
@@ -174,6 +192,69 @@ describe 'Events', type: :request do
         expect(response).to have_http_status(:accepted)
         expect(endpoint.messages.sole).to be_held
         expect(ActiveJob::Base.queue_adapter.enqueued_jobs).to be_empty
+      end
+    end
+
+    context 'when the project is below its monthly delivery limit' do
+      it 'accepts the event and meters the fan out' do
+        create(:endpoint, project: project, event_types: ['order.created'])
+
+        post '/api/v1/events', params: event_attributes, headers: headers, as: :json
+
+        expect(response).to have_http_status(:accepted)
+        expect(project.billing_owner.deliveries_used_in_period).to eq(1)
+      end
+    end
+
+    context 'when the project reached its monthly delivery limit' do
+      before do
+        create(:endpoint, project: project, event_types: ['order.created'])
+        limit = Plans::Entitlements.monthly_delivery_limit(project.billing_owner)
+        UserUsagePeriod.reserve_deliveries!(user: project.billing_owner, quantity: limit, limit: limit)
+      end
+
+      it 'rejects the event with a payment required contract' do
+        post '/api/v1/events', params: event_attributes, headers: headers, as: :json
+
+        expect(response).to have_http_status(:payment_required)
+        limit = Plans::Entitlements.monthly_delivery_limit(project.billing_owner)
+        body = JSON.parse(response.body)
+        expect(body.keys).to contain_exactly('error', 'message', 'status', 'used', 'limit', 'period_ends', 'errors')
+        expect(body['error']).to eq('plan_limit_exceeded')
+        expect(body['message']).to eq("The #{project.plan} plan allows at most #{limit} deliveries per month")
+        expect(body['status']).to eq(402)
+        expect(body['used']).to eq(limit)
+        expect(body['limit']).to eq(limit)
+        expect(body['period_ends']).to eq(UserUsagePeriod.period_ends_at.iso8601)
+        expect(body['errors']).to contain_exactly(
+          hash_including(
+            'field' => 'monthly_delivery_limit',
+            'message' => "The #{project.plan} plan allows at most #{limit} deliveries per month"
+          )
+        )
+      end
+
+      it 'persists the rejection instead of the event after the transaction rolls back' do
+        post '/api/v1/events', params: event_attributes, headers: headers, as: :json
+
+        expect(project.events.count).to eq(0)
+        expect(Message.count).to eq(0)
+        rejection = project.ingest_rejections.sole
+        expect(rejection.reason).to eq(IngestRejection::MONTHLY_DELIVERY_LIMIT_EXCEEDED)
+        expect(rejection.idempotency_key_digest).to eq(Digest::SHA256.hexdigest(event_attributes[:idempotency_key]))
+        expect(rejection.payload).to eq(
+          'payload_keys' => ['order_id'],
+          'payload_bytes' => event_attributes[:payload].to_json.bytesize
+        )
+      end
+
+      it 'accepts the event again once the plan allows it' do
+        project.billing_owner.update!(plan: User::PRO_PLAN)
+
+        post '/api/v1/events', params: event_attributes, headers: headers, as: :json
+
+        expect(response).to have_http_status(:accepted)
+        expect(project.events.count).to eq(1)
       end
     end
 
