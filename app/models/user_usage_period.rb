@@ -47,7 +47,7 @@ class UserUsagePeriod < ApplicationRecord
       where(user_id: user.id, period_starts_on: period_start_for(at)).pick(:deliveries_count) || 0
     end
 
-    def reserve_deliveries(user:, quantity:, limit:, at: Time.current)
+    def reserve_deliveries!(user:, quantity:, limit:, at: Time.current)
       return true unless quantity.positive?
 
       period = ensure_period!(user: user, period_starts_on: period_start_for(at))

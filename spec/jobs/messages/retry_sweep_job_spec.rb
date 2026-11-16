@@ -27,6 +27,14 @@ describe Messages::RetrySweepJob, type: :job do
       expect(described_class.sidekiq_options['retry']).to be(false)
     end
 
+    it 'runs stale lease recovery, due retry enqueueing and circuit probe scheduling' do
+      expect(Messages::RecoverStaleLeases).to receive(:call).once.ordered
+      expect(Messages::EnqueueDueRetries).to receive(:call).once.ordered
+      expect(CircuitProbes::Schedule).to receive(:call).once.ordered
+
+      described_class.new.perform
+    end
+
     it 'recovers stale leases and enqueues due retries' do
       stale = new_message
       stale.update_columns(status: 'delivering', attempt_count: 1, delivery_lease_expires_at: 1.minute.ago)

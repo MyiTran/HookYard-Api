@@ -14,7 +14,7 @@ module Messages
       message.reload
       return message if message.terminal?
 
-      claim = claim_attempt
+      claim = claim_attempt!
 
       return reschedule_after_capacity(claim) if claim.outcome == :capacity_full
       return message.reload unless claim.outcome == :claimed
@@ -25,7 +25,7 @@ module Messages
         body: claim.attempt.request_body,
         timeout: Webhooks::DeliveryPolicy.timeout_seconds_for(message.endpoint.project)
       )
-      finalize(claim, result)
+      finalize!(claim, result)
 
       message.reload
     end
@@ -34,26 +34,26 @@ module Messages
 
     attr_reader :http_client, :signer, :message
 
-    def claim_attempt
+    def claim_attempt!
       message.endpoint.with_lock do
         message.reload
-        claim_locked
+        claim_locked!
       end
     end
 
-    def claim_locked
+    def claim_locked!
       endpoint = message.endpoint.reload
       return Claim.new(outcome: :skipped) unless claimable?
 
-      return skip_while_not_enabled(endpoint) unless endpoint.enabled?
+      return skip_while_not_enabled!(endpoint) unless endpoint.enabled?
       return Claim.new(outcome: :skipped) if message.held?
-      return exhaust_attempts unless message.retries_available?
-      return reschedule_for_capacity if endpoint_at_capacity?
+      return exhaust_attempts! unless message.retries_available?
+      return reschedule_for_capacity! if endpoint_at_capacity?
 
-      claim_with_secret(endpoint)
+      claim_with_secret!(endpoint)
     end
 
-    def skip_while_not_enabled(endpoint)
+    def skip_while_not_enabled!(endpoint)
       message.hold!(reason: endpoint.circuit_hold_reason) unless message.held?
       Claim.new(outcome: :skipped)
     end
@@ -73,42 +73,39 @@ module Messages
              .count >= Webhooks::DeliveryPolicy::MAX_ACTIVE_DELIVERIES_PER_ENDPOINT
     end
 
-    def exhaust_attempts
+    def exhaust_attempts!
       message.mark_failed!
       Claim.new(outcome: :exhausted)
     end
 
-    def reschedule_for_capacity
+    def reschedule_for_capacity!
       retry_at = Time.current + Webhooks::DeliveryPolicy.capacity_retry_delay
       message.schedule_retry!(at: retry_at)
 
       Claim.new(outcome: :capacity_full, retry_at: retry_at)
     end
 
-    def claim_with_secret(endpoint)
+    def claim_with_secret!(endpoint)
       secret = current_secret
-      return failed_claim if secret.nil?
+      return failed_claim! if secret.nil?
 
       attempt_number = next_attempt_number
-      attributes = build_attempt_attributes(secret, attempt_number)
-      return failed_claim if attributes.nil?
+      attributes = build_attempt_attributes!(secret, attempt_number)
+      return failed_claim! if attributes.nil?
 
-      message.mark_delivering!(
-        lease_expires_at: Time.current + Webhooks::DeliveryPolicy.delivery_lease_duration,
-        attempt_count: attempt_number
-      )
-      lease_expires_at = message.reload.delivery_lease_expires_at
+      lease_expires_at = Time.current + Webhooks::DeliveryPolicy.delivery_lease_duration
+      message.mark_delivering!(lease_expires_at: lease_expires_at, attempt_count: attempt_number)
       attempt = message.delivery_attempts.create!(attributes)
 
       Claim.new(outcome: :claimed, attempt: attempt, lease_expires_at: lease_expires_at)
     end
 
-    def failed_claim
+    def failed_claim!
       message.mark_failed!
       Claim.new(outcome: :failed)
     end
 
-    def build_attempt_attributes(secret, attempt_number)
+    def build_attempt_attributes!(secret, attempt_number)
       attempt_attributes(secret, attempt_number)
     rescue StandardError
       message.mark_failed!
@@ -176,17 +173,17 @@ module Messages
       (message.delivery_attempts.maximum(:attempt_number) || 0) + 1
     end
 
-    def finalize(claim, result)
+    def finalize!(claim, result)
       retry_at = nil
       endpoint = message.endpoint
 
       DeliveryAttempt.transaction do
         endpoint.with_lock do
-          recorded = record_locked(claim, result) { |value| retry_at = value }
+          recorded = record_locked!(claim, result) { |value| retry_at = value }
 
           if recorded
-            resolve_circuit(endpoint.reload, result)
-            hold_for_open_circuit(endpoint.reload) if retry_at
+            resolve_circuit!(endpoint.reload, result)
+            hold_for_open_circuit!(endpoint.reload) if retry_at
           end
         end
       end
@@ -194,21 +191,20 @@ module Messages
       enqueue_retry(retry_at) if retry_at && !message.reload.held?
     end
 
-    def hold_for_open_circuit(endpoint)
+    def hold_for_open_circuit!(endpoint)
       return if endpoint.enabled?
 
       message.reload
       message.hold!(reason: endpoint.circuit_hold_reason) unless message.held?
     end
 
-    def record_locked(claim, result)
+    def record_locked!(claim, result)
       recorded = false
 
       message.with_lock do
-        message.reload
         next if superseded?(claim)
 
-        yield record_result(claim.attempt, result)
+        yield record_result!(claim.attempt, result)
         recorded = true
       end
 
@@ -223,7 +219,7 @@ module Messages
       message.delivering? && message.delivery_lease_expires_at == lease_expires_at
     end
 
-    def record_result(attempt, result)
+    def record_result!(attempt, result)
       if result.error?
         attempt.update!(
           error_type: result.error_type,
@@ -239,10 +235,10 @@ module Messages
         )
       end
 
-      transition_after_result(result)
+      transition_after_result!(result)
     end
 
-    def transition_after_result(result)
+    def transition_after_result!(result)
       if Webhooks::CircuitPolicy.success?(result)
         message.mark_succeeded!
         return nil
@@ -265,23 +261,19 @@ module Messages
       delay && Time.current + delay
     end
 
-    def resolve_circuit(endpoint, result)
+    def resolve_circuit!(endpoint, result)
       if Webhooks::CircuitPolicy.success?(result)
-        reset_circuit_failures(endpoint)
-      elsif Webhooks::CircuitPolicy.counted_failure?(result)
-        register_circuit_failure(endpoint)
+        reset_circuit_failures!(endpoint)
+      else
+        endpoint.register_circuit_failure!(result)
       end
     end
 
-    def reset_circuit_failures(endpoint)
+    def reset_circuit_failures!(endpoint)
       return unless endpoint.enabled?
       return if endpoint.circuit_failure_count.zero?
 
       endpoint.update!(circuit_failure_count: 0)
-    end
-
-    def register_circuit_failure(endpoint)
-      endpoint.register_circuit_failure!
     end
 
     def retryable_result?(result)
