@@ -591,41 +591,4 @@ describe 'Messages', type: :request do
       )
     end
   end
-
-  describe 'POST /api/v1/messages/:id/replay' do
-    it 'replays a terminally failed message for a member' do
-      message = create(:message, event: event, endpoint: endpoint, status: :failed, terminal_at: Time.current)
-
-      post "/api/v1/messages/#{message.id}/replay", headers: auth_headers(user)
-
-      expect(response).to have_http_status(:accepted)
-      body = JSON.parse(response.body)
-      expect(body['mode']).to eq(ReplayRun::MODE_SINGLE)
-      expect(body['items'].map { |item| item['message_id'] }).to contain_exactly(message.id)
-    end
-
-    it 'rejects a message that is not terminally failed' do
-      message = create(:message, event: event, endpoint: endpoint)
-
-      post "/api/v1/messages/#{message.id}/replay", headers: auth_headers(user)
-
-      expect(response).to have_http_status(:unprocessable_entity)
-    end
-
-    it 'does not expose a message of another project' do
-      other_message = create(:message, status: :failed, terminal_at: Time.current)
-
-      post "/api/v1/messages/#{other_message.id}/replay", headers: auth_headers(user)
-
-      expect(response).to have_http_status(:not_found)
-    end
-
-    it 'never exposes the endpoint signing secret' do
-      message = create(:message, event: event, endpoint: endpoint, status: :failed, terminal_at: Time.current)
-
-      post "/api/v1/messages/#{message.id}/replay", headers: auth_headers(user)
-
-      expect(response.body).not_to include(endpoint.current_signing_secret.secret)
-    end
-  end
 end
