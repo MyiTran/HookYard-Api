@@ -8,6 +8,7 @@
 #  error_message             :text
 #  error_type                :string
 #  hold_reason               :string
+#  quota_reserved_at         :datetime
 #  skip_reason               :string
 #  started_at                :datetime
 #  status                    :string           default("queued"), not null
@@ -92,6 +93,10 @@ class ReplayItem < ApplicationRecord
 
   def active?
     ACTIVE_STATUSES.include?(status)
+  end
+
+  def quota_reserved?
+    quota_reserved_at.present?
   end
 
   def terminal?

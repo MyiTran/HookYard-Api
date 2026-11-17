@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_11_03_110200) do
+ActiveRecord::Schema[8.0].define(version: 2026_11_03_110300) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -295,13 +295,14 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_03_110200) do
     t.datetime "completed_at"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.datetime "quota_reserved_at"
     t.index ["endpoint_id", "status"], name: "index_replay_items_on_endpoint_id_and_status"
     t.index ["endpoint_id"], name: "index_replay_items_on_endpoint_id"
-    t.index ["message_id"], name: "index_replay_items_on_active_message", unique: true, where: "((status)::text = ANY ((ARRAY['queued'::character varying, 'held'::character varying, 'delivering'::character varying])::text[]))"
+    t.index ["message_id"], name: "index_replay_items_on_active_message", unique: true, where: "((status)::text = ANY (ARRAY[('queued'::character varying)::text, ('held'::character varying)::text, ('delivering'::character varying)::text]))"
     t.index ["message_id"], name: "index_replay_items_on_message_id"
     t.index ["replay_run_id", "status"], name: "index_replay_items_on_replay_run_id_and_status"
     t.index ["replay_run_id"], name: "index_replay_items_on_replay_run_id"
-    t.check_constraint "status::text = ANY (ARRAY['queued'::character varying, 'held'::character varying, 'delivering'::character varying, 'succeeded'::character varying, 'failed'::character varying, 'skipped'::character varying]::text[])", name: "replay_items_status_valid"
+    t.check_constraint "status::text = ANY (ARRAY['queued'::character varying::text, 'held'::character varying::text, 'delivering'::character varying::text, 'succeeded'::character varying::text, 'failed'::character varying::text, 'skipped'::character varying::text])", name: "replay_items_status_valid"
   end
 
   create_table "replay_runs", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -316,7 +317,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_03_110200) do
     t.index ["actor_id"], name: "index_replay_runs_on_actor_id"
     t.index ["project_id", "created_at"], name: "index_replay_runs_on_project_id_and_created_at"
     t.index ["project_id"], name: "index_replay_runs_on_project_id"
-    t.check_constraint "mode::text = ANY (ARRAY['single'::character varying, 'bulk'::character varying]::text[])", name: "replay_runs_mode_valid"
+    t.check_constraint "mode::text = ANY (ARRAY['single'::character varying::text, 'bulk'::character varying::text])", name: "replay_runs_mode_valid"
     t.check_constraint "requested_count >= 0", name: "replay_runs_requested_count_non_negative"
   end
 
