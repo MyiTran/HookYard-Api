@@ -42,6 +42,16 @@ describe Replays::Deliver, type: :operation do
       expect(http_client).to have_received(:post).once
     end
 
+    it 'claims and sends only once when duplicate jobs run' do
+      allow(Webhooks::HttpClient).to receive(:new).and_return(http_client)
+      allow(http_client).to receive(:post).and_return(http_result(status: 200))
+
+      described_class.call(item: item)
+      described_class.call(item: item)
+
+      expect(http_client).to have_received(:post).once
+    end
+
     it 'creates a replay delivery attempt and marks the original message succeeded' do
       deliver(http_result(status: 204))
 

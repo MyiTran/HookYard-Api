@@ -78,6 +78,42 @@ describe Replays::RecoverStaleLeases, type: :operation do
       end
     end
 
+    context 'when the delivery already finalized successfully' do
+      before do
+        start_delivery(item, lease_expires_at: 1.minute.ago)
+        create(:delivery_attempt, message: message, attempt_number: 1, replay_item: item,
+                                  request_url: endpoint.url, request_body: '{"id":"evt"}')
+        item.mark_succeeded!
+        item.delivery_attempt.update!(response_status: 200)
+      end
+
+      it 'keeps the item and its attempt succeeded' do
+        described_class.call
+
+        expect(item.reload.status).to eq(ReplayItem::SUCCEEDED_STATUS)
+        expect(item.delivery_attempt.response_status).to eq(200)
+        expect(item.delivery_attempt.error_type).to be_nil
+      end
+    end
+
+    context 'when quota was already reserved for the replay' do
+      before do
+        start_delivery(item, lease_expires_at: 1.minute.ago)
+        item.update_columns(quota_reserved_at: now)
+        account = project.effective_billing_owner
+        UserUsagePeriod.reserve_deliveries!(user: account, quantity: 1, limit: 10)
+      end
+
+      it 'does not reserve additional quota while recovering the expired lease' do
+        account = project.effective_billing_owner
+
+        described_class.call
+
+        expect(account.deliveries_used_in_period).to eq(1)
+        expect(item.reload.quota_reserved_at).to eq(now)
+      end
+    end
+
     context 'when the expired item has no attempt' do
       before { start_delivery(item, lease_expires_at: 1.minute.ago) }
 
@@ -85,6 +121,65 @@ describe Replays::RecoverStaleLeases, type: :operation do
         expect { described_class.call }.not_to change(DeliveryAttempt, :count)
 
         expect(item.reload.status).to eq(ReplayItem::FAILED_STATUS)
+      end
+    end
+  end
+
+  describe 'concurrent recovery and finalize' do
+    self.use_transactional_tests = false
+
+    after { Project.delete_all }
+
+    it 'never leaves a finalized success overwritten by lease recovery' do
+      project = create(:project)
+      endpoint = create(:endpoint, project: project)
+      message = create(:message, event: create(:event, project: project), endpoint: endpoint)
+      run = create(:replay_run, project: project)
+      item = create(:replay_item, replay_run: run, message: message, endpoint: endpoint)
+      attempt = create(:delivery_attempt, message: message, attempt_number: 1, replay_item: item,
+                                          request_url: endpoint.url, request_body: '{"id":"evt"}')
+      item.update_columns(status: ReplayItem::DELIVERING_STATUS,
+                          delivery_lease_expires_at: 1.minute.ago,
+                          started_at: Time.current)
+
+      item_id = item.id
+      attempt_id = attempt.id
+      barrier = Queue.new
+
+      recovery = Thread.new do
+        ActiveRecord::Base.connection_pool.with_connection do
+          barrier.pop
+          described_class.call
+        end
+      end
+
+      finalize = Thread.new do
+        ActiveRecord::Base.connection_pool.with_connection do
+          barrier.pop
+          ReplayItem.transaction do
+            locked = ReplayItem.lock.find(item_id)
+            next unless locked.delivering?
+
+            locked.mark_succeeded!
+            DeliveryAttempt.find(attempt_id).update!(response_status: 200)
+          end
+        end
+      end
+
+      2.times { barrier << true }
+      [recovery, finalize].each(&:join)
+
+      item.reload
+      attempt.reload
+
+      if item.status == ReplayItem::SUCCEEDED_STATUS
+        expect(attempt.response_status).to eq(200)
+        expect(attempt.error_type).to be_nil
+      else
+        expect(item.status).to eq(ReplayItem::FAILED_STATUS)
+        expect(item.error_type).to eq(ReplayItem::LEASE_EXPIRED_ERROR_TYPE)
+        expect(attempt.error_type).to eq(DeliveryAttempt::LEASE_EXPIRED_ERROR_TYPE)
+        expect(attempt.response_status).to be_nil
       end
     end
   end
