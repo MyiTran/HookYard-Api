@@ -27,8 +27,9 @@ describe Messages::RetrySweepJob, type: :job do
       expect(described_class.sidekiq_options['retry']).to be(false)
     end
 
-    it 'runs stale lease recovery, due retry enqueueing and circuit probe scheduling' do
+    it 'runs message and replay stale lease recovery, due retry enqueueing and circuit probe scheduling' do
       expect(Messages::RecoverStaleLeases).to receive(:call).once.ordered
+      expect(Replays::RecoverStaleLeases).to receive(:call).once.ordered
       expect(Messages::EnqueueDueRetries).to receive(:call).once.ordered
       expect(CircuitProbes::Schedule).to receive(:call).once.ordered
 
