@@ -7,15 +7,17 @@ module Replays
     private
 
     def recover!(item_id, now)
-      item = ReplayItem.lock.find_by(id: item_id)
-      return if item.nil?
-      return unless item.lease_expired?(now)
+      ReplayItem.transaction do
+        item = ReplayItem.lock.find_by(id: item_id)
+        next if item.nil?
+        next unless item.lease_expired?(now)
 
-      abandon_in_progress_attempt!(item)
-      item.mark_failed!(
-        error_type: ReplayItem::LEASE_EXPIRED_ERROR_TYPE,
-        error_message: ReplayItem::LEASE_EXPIRED_MESSAGE
-      )
+        abandon_in_progress_attempt!(item)
+        item.mark_failed!(
+          error_type: ReplayItem::LEASE_EXPIRED_ERROR_TYPE,
+          error_message: ReplayItem::LEASE_EXPIRED_MESSAGE
+        )
+      end
     rescue ActiveRecord::RecordNotFound
       nil
     end
