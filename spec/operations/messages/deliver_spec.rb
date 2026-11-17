@@ -2,21 +2,22 @@ require 'rails_helper'
 
 describe Messages::Deliver, type: :operation do
   let(:project) { create(:project) }
-  let(:endpoint) { create(:endpoint, project: project) }
-  let(:event) { create(:event, project: project) }
+  let(:endpoint) { create(:endpoint, project: project, event_types: ['order.created']) }
+  let(:event) { create(:event, project: project, event_type: 'order.created', payload: { 'order_id' => 'ord_1' }) }
   let(:message) { create(:message, event: event, endpoint: endpoint) }
   let(:signer) { Webhooks::Signer }
   let(:http_client) { double('http_client') }
   let(:operation) { described_class.new(http_client: http_client, signer: signer) }
+  let(:sent_requests) { [] }
 
   before { travel_to(Time.zone.local(2026, 1, 1, 12, 0, 0)) }
 
-  def http_result(status: nil, error: nil, error_type: nil)
+  def http_result(status: nil, error: nil, error_type: nil, headers: {}, body: nil, duration_ms: 12)
     Webhooks::HttpClient::Result.new(
       status: status,
-      headers: {},
-      body: status.nil? ? nil : 'response body',
-      duration_ms: 12,
+      headers: headers,
+      body: body || (status.nil? ? nil : 'response body'),
+      duration_ms: duration_ms,
       error: error,
       error_type: error_type
     )
@@ -25,6 +26,16 @@ describe Messages::Deliver, type: :operation do
   def deliver(result)
     allow(http_client).to receive(:post).and_return(result)
     operation.call(message: message)
+  end
+
+  def verify_signature(attempt, secret)
+    Webhooks::Signer.verify(
+      secret: secret,
+      webhook_id: attempt.webhook_id,
+      timestamp: attempt.signed_at.to_i,
+      body: attempt.request_body,
+      signature: attempt.request_headers['webhook-signature']
+    )
   end
 
   def create_active_delivery(target_endpoint, lease_expires_at: 30.seconds.from_now)
@@ -47,6 +58,59 @@ describe Messages::Deliver, type: :operation do
     end
   end
 
+  describe '.call' do
+    it 'delivers through the public operation api with the default dependencies' do
+      allow(Webhooks::HttpClient).to receive(:new).and_return(http_client)
+      allow(http_client).to receive(:post).and_return(http_result(status: 200))
+
+      described_class.call(message: message)
+
+      expect(message.reload.status).to eq('succeeded')
+      expect(http_client).to have_received(:post).once
+      expect(message.delivery_attempts.sole.response_status).to eq(200)
+    end
+  end
+
+  describe 'request evidence' do
+    before do
+      allow(http_client).to receive(:post) do |url:, headers:, body:, timeout:|
+        sent_requests << { url: url, headers: headers, body: body, timeout: timeout }
+        http_result(status: 200)
+      end
+    end
+
+    it 'records request evidence that matches what was sent' do
+      operation.call(message: message)
+
+      attempt = message.delivery_attempts.first
+      sent = sent_requests.first
+
+      expect(attempt.request_url).to eq(sent[:url])
+      expect(attempt.http_method).to eq('POST')
+      expect(attempt.request_headers).to eq(sent[:headers])
+      expect(attempt.request_body).to eq(sent[:body])
+      expect(attempt.attempt_number).to eq(1)
+      expect(sent[:timeout]).to eq(Webhooks::DeliveryPolicy::HTTP_TIMEOUT_SECONDS)
+    end
+
+    it 'signs the exact body that is sent' do
+      operation.call(message: message)
+
+      attempt = message.delivery_attempts.first
+      payload = verify_signature(attempt, endpoint.current_signing_secret.secret)
+
+      expect(payload).to include('type' => 'order.created', 'id' => event.id)
+      expect(attempt.request_headers['webhook-id']).to eq(attempt.webhook_id)
+      expect(attempt.request_headers['webhook-request-id']).to eq(attempt.request_id)
+    end
+
+    it 'records the signing secret version that was used' do
+      operation.call(message: message)
+
+      expect(message.delivery_attempts.first.signing_secret_version).to eq(1)
+    end
+  end
+
   describe 'terminal success' do
     it 'marks the message succeeded and records the attempt evidence' do
       deliver(http_result(status: 204))
@@ -58,6 +122,68 @@ describe Messages::Deliver, type: :operation do
       expect(message.terminal_at).to eq(Time.current)
       expect(message.delivery_attempts.one?).to be(true)
       expect(message.delivery_attempts.first.response_status).to eq(204)
+    end
+
+    it 'stores the response evidence and drops credential headers' do
+      deliver(
+        http_result(
+          status: 200,
+          headers: { 'content-type' => ['application/json'], 'set-cookie' => ['session=secret'] },
+          body: '{"ok":true}',
+          duration_ms: 15
+        )
+      )
+
+      attempt = message.delivery_attempts.first
+      expect(attempt.response_status).to eq(200)
+      expect(attempt.response_headers).to eq('content-type' => ['application/json'])
+      expect(attempt.response_body).to eq('{"ok":true}')
+      expect(attempt.duration_ms).to eq(15)
+      expect(message.reload).to be_succeeded
+    end
+
+    it 'stores a capped response body' do
+      deliver(http_result(status: 200, body: 'a' * 5000))
+
+      expect(message.delivery_attempts.first.response_body.bytesize)
+        .to eq(DeliveryAttempt::RESPONSE_BODY_MAX_BYTES)
+    end
+  end
+
+  describe 'signing secret rotation' do
+    it 'uses the new current version for new deliveries' do
+      legacy_secret = endpoint.current_signing_secret.secret
+      deliver(http_result(status: 200))
+      endpoint.rotate_signing_secret!
+
+      second_message = create(:message, event: create(:event, project: project), endpoint: endpoint)
+      described_class.new(http_client: http_client, signer: signer).call(message: second_message)
+
+      attempt = second_message.delivery_attempts.first
+      expect(attempt.signing_secret_version).to eq(2)
+      expect(verify_signature(attempt, endpoint.current_signing_secret.secret)).to include('type' => 'order.created')
+      expect { verify_signature(attempt, legacy_secret) }
+        .to raise_error(StandardWebhooks::WebhookVerificationError)
+    end
+
+    it 'keeps the original version on historical attempts' do
+      deliver(http_result(status: 200))
+      endpoint.rotate_signing_secret!
+
+      expect(message.delivery_attempts.first.reload.signing_secret_version).to eq(1)
+    end
+
+    it 'never starts a delivery with a secret retired before the claim' do
+      retired_secret = endpoint.current_signing_secret.secret
+      endpoint.rotate_signing_secret!
+
+      deliver(http_result(status: 200))
+
+      attempt = message.delivery_attempts.first
+      expect(attempt.signing_secret_version).to eq(2)
+      expect(verify_signature(attempt, endpoint.current_signing_secret.secret)).to include('type' => 'order.created')
+      expect { verify_signature(attempt, retired_secret) }
+        .to raise_error(StandardWebhooks::WebhookVerificationError)
     end
   end
 
@@ -92,24 +218,19 @@ describe Messages::Deliver, type: :operation do
     end
   end
 
+
   describe 'external text encoding' do
     let(:binary_payload) { "binary\xFF\xFE".b }
 
-    def binary_result(status:, headers: {}, body: nil)
-      Webhooks::HttpClient::Result.new(
-        status: status, headers: headers, body: body, duration_ms: 12, error: nil, error_type: nil
-      )
-    end
-
     it 'stores a binary receiver body as valid UTF-8' do
-      deliver(binary_result(status: 204, body: binary_payload))
+      deliver(http_result(status: 204, body: binary_payload))
 
       expect(message.reload.status).to eq('succeeded')
       expect(message.delivery_attempts.first.response_body).to be_valid_encoding
     end
 
     it 'keeps the response evidence and schedules the retry for a retryable binary response' do
-      deliver(binary_result(status: 502, headers: { 'x-trace' => [binary_payload] }, body: binary_payload))
+      deliver(http_result(status: 502, headers: { 'x-trace' => [binary_payload] }, body: binary_payload))
 
       attempt = message.delivery_attempts.first
       expect(attempt.response_body).to be_valid_encoding
@@ -136,7 +257,7 @@ describe Messages::Deliver, type: :operation do
         expect(message.attempt_count).to eq(1)
         expect(message.terminal_at).to be_nil
         expect(message.delivery_lease_expires_at).to be_nil
-        expect(message.next_retry_at).to be_between(Time.current + 5.seconds, Time.current + 6.seconds)
+        expect(message.next_retry_at).to be_between(Time.current + 5.seconds, Time.current + (5.seconds * 1.2))
         expect(message.delivery_attempts.one?).to be(true)
         expect(message.delivery_attempts.first.status).to eq('failed')
       end
@@ -149,6 +270,7 @@ describe Messages::Deliver, type: :operation do
       expect(attempt.error_type).to eq('Net::ReadTimeout')
       expect(attempt.error_message).to eq('execution expired')
       expect(attempt.response_status).to be_nil
+      expect(attempt).to be_transport_failed
     end
 
     it 'uses the configured schedule for later attempts' do
@@ -158,7 +280,33 @@ describe Messages::Deliver, type: :operation do
 
       deliver(http_result(status: 500))
 
-      expect(message.reload.next_retry_at).to be_between(Time.current + 30.minutes, Time.current + 36.minutes)
+      expect(message.reload.attempt_count).to eq(3)
+      expect(message.next_retry_at).to be_between(Time.current + 30.minutes, Time.current + (30.minutes * 1.2))
+    end
+
+    it 'follows the whole eight attempt lifecycle on HTTP 500 before giving up' do
+      stub_const('Webhooks::CircuitPolicy::FAILURE_THRESHOLD', 100)
+      allow(http_client).to receive(:post).and_return(http_result(status: 500))
+
+      (Webhooks::DeliveryPolicy::MAX_ATTEMPTS - 1).times do |index|
+        operation.call(message: message)
+
+        message.reload
+        expect(message.attempt_count).to eq(index + 1)
+        expect(message.status).to eq('pending')
+
+        expected_delay = Webhooks::DeliveryPolicy::RETRY_DELAYS[index]
+        expect(message.next_retry_at).to be_between(Time.current + expected_delay, Time.current + (expected_delay * 1.2))
+        travel(expected_delay * 1.2 + 1.minute)
+      end
+
+      operation.call(message: message)
+
+      message.reload
+      expect(message.attempt_count).to eq(8)
+      expect(message.status).to eq('failed')
+      expect(message.next_retry_at).to be_nil
+      expect(message.delivery_attempts.count).to eq(8)
     end
 
     it 'enqueues the next delivery for the retry time' do
@@ -170,6 +318,91 @@ describe Messages::Deliver, type: :operation do
       expect(job[:job]).to eq(Messages::DeliverJob)
       expect(job[:args]).to eq([message.id])
       expect(job[:at]).to be_within(0.001).of(message.next_retry_at.to_f)
+    end
+
+    it 'does not send again once the message succeeded' do
+      deliver(http_result(status: 200))
+      described_class.new(http_client: http_client, signer: signer).call(message: Message.find(message.id))
+
+      expect(http_client).to have_received(:post).once
+      expect(message.delivery_attempts.count).to eq(1)
+    end
+  end
+
+  describe 'destination resolution' do
+    let(:resolver) { double('resolver') }
+    let(:operation) { described_class.new(http_client: Webhooks::HttpClient.new(resolver: resolver), signer: signer) }
+
+    context 'when the dns lookup times out' do
+      before { allow(resolver).to receive(:resolve).and_raise(Webhooks::DestinationResolver::ResolutionFailed) }
+
+      it 'retries the message on the schedule' do
+        operation.call(message: message)
+
+        message.reload
+        expect(message.status).to eq('pending')
+        expect(message.attempt_count).to eq(1)
+        expect(message.next_retry_at).to be_between(Time.current + 5.seconds, Time.current + (5.seconds * 1.2))
+      end
+
+      it 'records the resolution failure on the attempt' do
+        operation.call(message: message)
+
+        attempt = message.reload.delivery_attempts.first
+        expect(attempt.error_type).to eq('Webhooks::DestinationResolver::ResolutionFailed')
+        expect(attempt.response_status).to be_nil
+      end
+    end
+
+    context 'when the dns resolver reports an error' do
+      it 'retries the message on the schedule' do
+        allow(resolver).to receive(:resolve)
+          .and_raise(Webhooks::DestinationResolver::ResolutionFailed.new('destination resolution failed'))
+
+        operation.call(message: message)
+
+        message.reload
+        expect(message.status).to eq('pending')
+        expect(message.next_retry_at).to be_between(Time.current + 5.seconds, Time.current + (5.seconds * 1.2))
+      end
+    end
+
+    context 'when the dns lookup returns no address' do
+      it 'retries the message on the schedule' do
+        allow(resolver).to receive(:resolve).and_raise(Webhooks::DestinationResolver::ResolutionFailed)
+
+        operation.call(message: message)
+
+        expect(message.reload.status).to eq('pending')
+      end
+    end
+
+    context 'when the destination is not publicly routable' do
+      before { allow(resolver).to receive(:resolve).and_raise(Webhooks::DestinationResolver::NotPubliclyRoutable) }
+
+      it 'terminally fails the message without a retry' do
+        operation.call(message: message)
+
+        message.reload
+        expect(message.status).to eq('failed')
+        expect(message.attempt_count).to eq(1)
+        expect(message.next_retry_at).to be_nil
+        expect(message.terminal_at).to eq(Time.current)
+        expect(message.delivery_attempts.first.error_type)
+          .to eq('Webhooks::DestinationResolver::NotPubliclyRoutable')
+      end
+
+      it 'still resolves the destination before every retried attempt' do
+        allow(resolver).to receive(:resolve).and_raise(Webhooks::DestinationResolver::NotPubliclyRoutable)
+
+        operation.call(message: message)
+
+        message.update_columns(next_retry_at: 1.minute.ago)
+        operation.call(message: message)
+
+        expect(resolver).to have_received(:resolve).once
+        expect(message.reload.attempt_count).to eq(1)
+      end
     end
   end
 
@@ -221,20 +454,21 @@ describe Messages::Deliver, type: :operation do
   end
 
   describe 'attempt exhaustion' do
-    it 'terminally fails after the eighth attempt' do
-      7.times do |index|
+    it 'terminally fails after the last attempt' do
+      stub_const('Webhooks::DeliveryPolicy::MAX_ATTEMPTS', 3)
+      2.times do |index|
         create(:delivery_attempt, message: message, attempt_number: index + 1, response_status: 500)
       end
-      message.update_columns(attempt_count: 7)
+      message.update_columns(attempt_count: 2)
 
       deliver(http_result(status: 503))
 
       expect(message.reload.status).to eq('failed')
-      expect(message.attempt_count).to eq(8)
+      expect(message.attempt_count).to eq(3)
       expect(message.next_retry_at).to be_nil
       expect(message.delivery_lease_expires_at).to be_nil
       expect(message.terminal_at).to eq(Time.current)
-      expect(message.delivery_attempts.count).to eq(8)
+      expect(message.delivery_attempts.count).to eq(3)
     end
 
     it 'does not deliver a message that already used every attempt' do

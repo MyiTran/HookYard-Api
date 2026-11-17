@@ -5,6 +5,7 @@ module Messages
 
     def perform
       Messages::RecoverStaleLeases.call
+      Replays::RecoverStaleLeases.call
       Messages::EnqueueDueRetries.call
       CircuitProbes::Schedule.call
     end

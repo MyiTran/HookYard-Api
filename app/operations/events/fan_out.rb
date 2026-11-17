@@ -22,7 +22,7 @@ module Events
         record_timestamps: true
       )
 
-      increment_queue_counters(created)
+      increment_queue_counters!(created)
 
       created.map { |row| row['id'] }
     end
@@ -44,7 +44,7 @@ module Events
       end
     end
 
-    def increment_queue_counters(created)
+    def increment_queue_counters!(created)
       created.group_by { |row| row['endpoint_id'] }.each do |endpoint_id, rows|
         Endpoint.where(id: endpoint_id).update_all(
           ['queued_message_count = queued_message_count + ?', rows.size]

@@ -1,71 +1,68 @@
 require 'rails_helper'
 
 describe Messages::EnqueuePending, type: :operation do
-  let(:project) { create(:project) }
-  let(:endpoint) { create(:endpoint, project: project) }
-  let(:grace) { Constants::WEBHOOK_DELIVERY_ENQUEUE_GRACE_SECONDS.seconds }
-
-  before { travel_to(Time.zone.local(2026, 1, 1, 12, 0, 0)) }
-
-  def new_message(**attributes)
-    create(:message, project: project, endpoint: endpoint, **attributes)
-  end
-
-  def enqueued_message_ids
-    ActiveJob::Base.queue_adapter.enqueued_jobs
-                       .select { |job| job[:job] == Messages::DeliverJob }
-                       .map { |job| job[:args].first }
-  end
+  include ActiveJob::TestHelper
 
   describe '.call' do
-    it 'enqueues pending messages that were never retried and are past the grace period' do
-      stranded = new_message
-      stranded.update_columns(updated_at: (grace + 1.minute).ago)
+    let(:event) { create(:event) }
+    let(:now) { Time.current }
+    let(:grace_seconds) { Constants::WEBHOOK_DELIVERY_ENQUEUE_GRACE_SECONDS }
 
-      described_class.call
+    before { clear_enqueued_jobs }
 
-      expect(enqueued_message_ids).to contain_exactly(stranded.id)
+    def create_message(status: :pending, age_seconds: 0, next_retry_at: nil)
+      endpoint = create(:endpoint, project: event.project, event_types: [event.event_type])
+      message = create(:message, event: event, endpoint: endpoint)
+      message.update_columns(status: status.to_s, next_retry_at: next_retry_at, updated_at: now - age_seconds.seconds)
+      message
     end
 
-    it 'does not enqueue messages that were committed within the grace period' do
-      new_message
+    it 'enqueues a pending message older than the grace period' do
+      stale_message = create_message(age_seconds: grace_seconds + 1)
 
-      described_class.call
-
-      expect(enqueued_message_ids).to be_empty
+      expect { described_class.call(now: now) }
+        .to have_enqueued_job(Messages::DeliverJob).with(stale_message.id)
     end
 
-    it 'leaves messages with a scheduled retry to the retry sweep' do
-      retry_waiting = new_message(next_retry_at: 1.minute.from_now)
-      retry_waiting.update_columns(updated_at: (grace + 1.minute).ago)
+    it 'does not enqueue a pending message inside the grace period' do
+      create_message(age_seconds: grace_seconds - 1)
 
-      described_class.call
-
-      expect(enqueued_message_ids).to be_empty
+      expect { described_class.call(now: now) }.not_to have_enqueued_job(Messages::DeliverJob)
     end
 
     it 'does not enqueue messages that are no longer pending' do
-      delivered = new_message(status: :succeeded)
-      delivered.update_columns(updated_at: (grace + 1.minute).ago)
+      %i[delivering succeeded failed].each { |status| create_message(status: status, age_seconds: grace_seconds + 1) }
 
-      described_class.call
-
-      expect(enqueued_message_ids).to be_empty
+      expect { described_class.call(now: now) }.not_to have_enqueued_job(Messages::DeliverJob)
     end
-  end
 
-  describe 'enqueue failures' do
-    it 'keeps the message pending for the next recovery sweep' do
-      stranded = new_message
-      stranded.update_columns(updated_at: (grace + 1.minute).ago)
+    it 'leaves messages with a scheduled retry to the retry sweep' do
+      create_message(age_seconds: grace_seconds + 1, next_retry_at: now + 1.minute)
 
-      allow(Messages::DeliverJob).to receive(:perform_later).and_raise(StandardError, 'redis unavailable')
-      allow(Rails.logger).to receive(:error).and_call_original
+      expect { described_class.call(now: now) }.not_to have_enqueued_job(Messages::DeliverJob)
+    end
 
-      described_class.call
+    context 'when enqueueing fails' do
+      it 'keeps the message pending for the next recovery sweep' do
+        stale_message = create_message(age_seconds: grace_seconds + 1)
+        allow(Messages::DeliverJob).to receive(:perform_later).and_raise(RuntimeError, 'redis unavailable')
+        allow(Rails.logger).to receive(:error)
 
-      expect(Rails.logger).to have_received(:error).with(/enqueue failed for message #{stranded.id}/)
-      expect(stranded.reload.status).to eq('pending')
+        described_class.call(now: now)
+
+        expect(Rails.logger).to have_received(:error).with(/Webhook delivery enqueue failed for message #{stale_message.id}/)
+        expect(stale_message.reload.status).to eq('pending')
+        expect(stale_message.next_retry_at).to be_nil
+      end
+    end
+
+    it 'sends the stale message ids through the shared enqueue path' do
+      stale_message = create_message(age_seconds: grace_seconds + 1)
+      allow(Messages::EnqueueDelivery).to receive(:call)
+
+      described_class.call(now: now)
+
+      expect(Messages::EnqueueDelivery).to have_received(:call).with(message_ids: [stale_message.id])
     end
   end
 end

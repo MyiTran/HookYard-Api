@@ -13,7 +13,17 @@ class ReplayCandidatesQuery < MessagesQuery
   end
 
   def call(scope = Message.none, eligible: true, as_of: nil, **params)
-    scope = apply_filters(base_scope(scope, as_of), filtered_params(params))
+    params = filtered_params(params)
+    scope = base_scope(scope, as_of)
+
+    scope = filter(scope, :by_search, params[:q])
+    scope = filter(scope, :by_message_id, params[:message_id])
+    scope = filter(scope, :by_request_id, params[:request_id])
+    scope = filter(scope, :by_endpoint, params[:endpoint_id])
+    scope = filter(scope, :by_event_type, params[:event_type])
+    scope = filter(scope, :by_from, params[:from])
+    scope = filter(scope, :by_to, params[:to])
+    scope = apply_order(scope, params[:order])
 
     eligible ? eligible_only(scope) : scope
   end

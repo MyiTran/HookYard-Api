@@ -11,6 +11,7 @@
 #
 # Indexes
 #
+#  index_user_usage_periods_on_user_id                       (user_id)
 #  index_user_usage_periods_on_user_id_and_period_starts_on  (user_id,period_starts_on) UNIQUE
 #
 # Foreign Keys
@@ -47,7 +48,7 @@ class UserUsagePeriod < ApplicationRecord
       where(user_id: user.id, period_starts_on: period_start_for(at)).pick(:deliveries_count) || 0
     end
 
-    def reserve_deliveries(user:, quantity:, limit:, at: Time.current)
+    def reserve_deliveries!(user:, quantity:, limit:, at: Time.current)
       return true unless quantity.positive?
 
       period = ensure_period!(user: user, period_starts_on: period_start_for(at))

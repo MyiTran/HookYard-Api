@@ -1,7 +1,7 @@
 module Replays
   class DeliverJob < ApplicationJob
     queue_as :low
-    sidekiq_options retry: false
+    sidekiq_options retry: 5
 
     discard_on ActiveRecord::RecordNotFound
 

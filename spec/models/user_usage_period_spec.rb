@@ -40,7 +40,7 @@ describe UserUsagePeriod, type: :model do
     end
 
     context 'when the account reserved deliveries in the period' do
-      before { described_class.reserve_deliveries(user: account, quantity: 3, limit: 10, at: at) }
+      before { described_class.reserve_deliveries!(user: account, quantity: 3, limit: 10, at: at) }
 
       it 'returns the reserved deliveries of that period' do
         expect(described_class.used_deliveries(user: account, at: at)).to eq(3)
@@ -63,10 +63,10 @@ describe UserUsagePeriod, type: :model do
     end
   end
 
-  describe '.reserve_deliveries' do
+  describe '.reserve_deliveries!' do
     context 'when the account has no usage in the period yet' do
       it 'creates the period and counts the reserved deliveries' do
-        reserved = described_class.reserve_deliveries(user: account, quantity: 2, limit: 5, at: at)
+        reserved = described_class.reserve_deliveries!(user: account, quantity: 2, limit: 5, at: at)
 
         expect(reserved).to be(true)
         expect(usage_period.deliveries_count).to eq(2)
@@ -74,10 +74,10 @@ describe UserUsagePeriod, type: :model do
     end
 
     context 'when the account already reserved deliveries in the period' do
-      before { described_class.reserve_deliveries(user: account, quantity: 2, limit: 5, at: at) }
+      before { described_class.reserve_deliveries!(user: account, quantity: 2, limit: 5, at: at) }
 
       it 'adds to the same period counter' do
-        described_class.reserve_deliveries(user: account, quantity: 3, limit: 5, at: at)
+        described_class.reserve_deliveries!(user: account, quantity: 3, limit: 5, at: at)
 
         expect(usage_period.deliveries_count).to eq(5)
         expect(described_class.where(user_id: account.id).count).to eq(1)
@@ -85,10 +85,10 @@ describe UserUsagePeriod, type: :model do
     end
 
     context 'when the reservation would exceed the limit' do
-      before { described_class.reserve_deliveries(user: account, quantity: 4, limit: 5, at: at) }
+      before { described_class.reserve_deliveries!(user: account, quantity: 4, limit: 5, at: at) }
 
       it 'refuses the reservation and keeps the counter unchanged' do
-        reserved = described_class.reserve_deliveries(user: account, quantity: 2, limit: 5, at: at)
+        reserved = described_class.reserve_deliveries!(user: account, quantity: 2, limit: 5, at: at)
 
         expect(reserved).to be(false)
         expect(usage_period.deliveries_count).to eq(4)
@@ -97,7 +97,7 @@ describe UserUsagePeriod, type: :model do
 
     context 'when the reservation reaches the limit exactly' do
       it 'accepts it' do
-        reserved = described_class.reserve_deliveries(user: account, quantity: 5, limit: 5, at: at)
+        reserved = described_class.reserve_deliveries!(user: account, quantity: 5, limit: 5, at: at)
 
         expect(reserved).to be(true)
         expect(usage_period.deliveries_count).to eq(5)
@@ -106,7 +106,7 @@ describe UserUsagePeriod, type: :model do
 
     context 'when there is nothing to reserve' do
       it 'accepts without touching the counter' do
-        reserved = described_class.reserve_deliveries(user: account, quantity: 0, limit: 5, at: at)
+        reserved = described_class.reserve_deliveries!(user: account, quantity: 0, limit: 5, at: at)
 
         expect(reserved).to be(true)
         expect(described_class.where(user_id: account.id)).to be_empty
@@ -115,12 +115,12 @@ describe UserUsagePeriod, type: :model do
 
     context 'when the remaining quota was consumed after the period was read' do
       before do
-        described_class.reserve_deliveries(user: account, quantity: 3, limit: 5, at: at)
+        described_class.reserve_deliveries!(user: account, quantity: 3, limit: 5, at: at)
         usage_period.update_columns(deliveries_count: 5)
       end
 
       it 'refuses the reservation because the limit is checked in the database' do
-        reserved = described_class.reserve_deliveries(user: account, quantity: 1, limit: 5, at: at)
+        reserved = described_class.reserve_deliveries!(user: account, quantity: 1, limit: 5, at: at)
 
         expect(reserved).to be(false)
         expect(usage_period.reload.deliveries_count).to eq(5)
@@ -129,10 +129,10 @@ describe UserUsagePeriod, type: :model do
 
     context 'when the period changes' do
       it 'keeps a separate counter per month' do
-        described_class.reserve_deliveries(user: account, quantity: 5, limit: 5, at: at)
+        described_class.reserve_deliveries!(user: account, quantity: 5, limit: 5, at: at)
 
         next_month = Time.utc(2026, 11, 2, 9, 0)
-        reserved = described_class.reserve_deliveries(user: account, quantity: 5, limit: 5, at: next_month)
+        reserved = described_class.reserve_deliveries!(user: account, quantity: 5, limit: 5, at: next_month)
 
         expect(reserved).to be(true)
         expect(usage_period.deliveries_count).to eq(5)
@@ -143,11 +143,11 @@ describe UserUsagePeriod, type: :model do
     context 'when another account already used its quota' do
       before do
         other_account = create(:user)
-        described_class.reserve_deliveries(user: other_account, quantity: 5, limit: 5, at: at)
+        described_class.reserve_deliveries!(user: other_account, quantity: 5, limit: 5, at: at)
       end
 
       it 'reserves against the current account only' do
-        reserved = described_class.reserve_deliveries(user: account, quantity: 1, limit: 5, at: at)
+        reserved = described_class.reserve_deliveries!(user: account, quantity: 1, limit: 5, at: at)
 
         expect(reserved).to be(true)
         expect(usage_period.deliveries_count).to eq(1)

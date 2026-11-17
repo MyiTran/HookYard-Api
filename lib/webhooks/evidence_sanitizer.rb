@@ -37,14 +37,14 @@ module Webhooks
     end
 
     def sanitize_body(body)
-      return body if body.nil?
+      return nil if body.nil?
 
       parsed = JSON.parse(body.to_s)
-      return body unless parsed.is_a?(Hash) || parsed.is_a?(Array)
+      return nil unless parsed.is_a?(Hash) || parsed.is_a?(Array)
 
       JSON.pretty_generate(redact_json(parsed))
     rescue JSON::ParserError, EncodingError, ArgumentError
-      body
+      nil
     end
 
     def redact_json(value)

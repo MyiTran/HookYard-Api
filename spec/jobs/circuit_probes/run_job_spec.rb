@@ -10,11 +10,9 @@ describe CircuitProbes::RunJob, type: :job do
   describe '#perform' do
     it 'runs the synthetic probe for the endpoint' do
       endpoint = create(:endpoint)
-      allow(CircuitProbes::Run).to receive(:call)
+      expect(CircuitProbes::Run).to receive(:call).with(endpoint: endpoint).once
 
       described_class.new.perform(endpoint.id)
-
-      expect(CircuitProbes::Run).to have_received(:call).with(endpoint: endpoint)
     end
 
     it 'is discarded when the endpoint no longer exists' do

@@ -27,6 +27,28 @@ describe 'Admin::Accounts', type: :request do
       expect(Plans::Entitlements.endpoint_limit(account.reload)).to eq(50)
     end
 
+    it 'lets an admin switch a non-admin customer plan without changing their roles' do
+      customer = create(:user).tap { |user| user.add_role(:support) }
+
+      patch "/api/v1/admin/accounts/#{customer.id}/plan",
+            params: { account: { plan: User::PRO_PLAN } }, headers: auth_headers(admin), as: :json
+
+      expect(response).to have_http_status(:ok)
+      expect(customer.reload.plan).to eq(User::PRO_PLAN)
+      expect(customer.reload).to be_support
+      expect(customer.reload).not_to be_admin
+    end
+
+    it 'rejects an admin from changing another admin account plan' do
+      admin_target = create(:user).tap { |user| user.add_role(:admin) }
+
+      patch "/api/v1/admin/accounts/#{admin_target.id}/plan",
+            params: { account: { plan: User::PRO_PLAN } }, headers: auth_headers(admin), as: :json
+
+      expect(response).to have_http_status(:unprocessable_entity)
+      expect(admin_target.reload.plan).to eq(User::FREE_PLAN)
+    end
+
     it 'rejects an unknown plan' do
       patch "/api/v1/admin/accounts/#{account.id}/plan",
             params: { account: { plan: 'enterprise' } }, headers: auth_headers(admin), as: :json

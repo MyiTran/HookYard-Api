@@ -22,7 +22,7 @@ describe CircuitProbes::Run, type: :operation do
   end
 
   def open_circuit(disable_at: now + 5.days, next_probe_at: now)
-    endpoint.update!(
+    endpoint.update_columns(
       circuit_state: 'circuit_open',
       circuit_failure_count: 5,
       circuit_opened_at: now,
@@ -50,7 +50,7 @@ describe CircuitProbes::Run, type: :operation do
 
       it 'sends a signed synthetic health check instead of a business event' do
         captured = nil
-        allow(http_client).to receive(:post) do |attributes|
+        expect(http_client).to receive(:post).once do |attributes|
           captured = attributes
           http_result
         end
@@ -72,7 +72,7 @@ describe CircuitProbes::Run, type: :operation do
 
       it 'signs the probe with the current endpoint secret' do
         captured = nil
-        allow(http_client).to receive(:post) do |attributes|
+        expect(http_client).to receive(:post).once do |attributes|
           captured = attributes
           http_result
         end
@@ -92,7 +92,7 @@ describe CircuitProbes::Run, type: :operation do
 
       it 'records the probe evidence without touching messages or attempts' do
         message = held_message
-        allow(http_client).to receive(:post).and_return(http_result(status: 200))
+        expect(http_client).to receive(:post).once.and_return(http_result(status: 200))
 
         expect { operation.call(endpoint: endpoint) }.to change(CircuitProbe, :count).by(1)
 
@@ -111,7 +111,7 @@ describe CircuitProbes::Run, type: :operation do
       end
 
       it 'filters sensitive response headers and keeps the stored body valid UTF-8' do
-        allow(http_client).to receive(:post).and_return(
+        expect(http_client).to receive(:post).once.and_return(
           http_result(status: 500, headers: { 'set-cookie' => 'session=1', 'x-trace' => 'abc' }, body: "bad\xFF".b)
         )
 
@@ -123,7 +123,7 @@ describe CircuitProbes::Run, type: :operation do
       end
 
       it 'records a transport error as failed probe evidence' do
-        allow(http_client).to receive(:post).and_return(
+        expect(http_client).to receive(:post).once.and_return(
           http_result(status: nil, body: nil, error: 'execution expired', error_type: 'Net::ReadTimeout')
         )
 
@@ -139,7 +139,7 @@ describe CircuitProbes::Run, type: :operation do
       it 'closes the circuit and releases held messages after a successful probe' do
         first = held_message
         second = held_message(created_at: now + 1.minute)
-        allow(http_client).to receive(:post).and_return(http_result(status: 200))
+        expect(http_client).to receive(:post).once.and_return(http_result(status: 200))
 
         operation.call(endpoint: endpoint)
 
@@ -158,7 +158,7 @@ describe CircuitProbes::Run, type: :operation do
 
       it 'releases and enqueues a backlog larger than the endpoint concurrency' do
         messages = Array.new(5) { held_message }
-        allow(http_client).to receive(:post).and_return(http_result(status: 200))
+        expect(http_client).to receive(:post).once.and_return(http_result(status: 200))
 
         operation.call(endpoint: endpoint)
 
@@ -169,7 +169,7 @@ describe CircuitProbes::Run, type: :operation do
       it 'recovers a pending message that lost its hold with a stale pre-circuit retry' do
         stranded = held_message
         stranded.update_columns(held_at: nil, hold_reason: nil, next_retry_at: now + 5.hours)
-        allow(http_client).to receive(:post).and_return(http_result(status: 200))
+        expect(http_client).to receive(:post).once.and_return(http_result(status: 200))
 
         operation.call(endpoint: endpoint)
 
@@ -183,7 +183,7 @@ describe CircuitProbes::Run, type: :operation do
       it 'leaves no pending message stranded after the recovery' do
         held_message
         held_message(created_at: now + 1.minute)
-        allow(http_client).to receive(:post).and_return(http_result(status: 200))
+        expect(http_client).to receive(:post).once.and_return(http_result(status: 200))
 
         operation.call(endpoint: endpoint)
 
@@ -196,7 +196,9 @@ describe CircuitProbes::Run, type: :operation do
       it 'keeps the circuit open and schedules the next probe after a failed probe' do
         Webhooks::DeliveryPolicy.jitter_source = -> { 0 }
         message = held_message
-        allow(http_client).to receive(:post).and_return(http_result(status: 503))
+        expect(http_client).to receive(:post).once.and_return(http_result(status: 503))
+        expect(endpoint).to receive(:register_probe_failure!)
+          .with(kind_of(Webhooks::HttpClient::Result), at: now).once.and_call_original
 
         operation.call(endpoint: endpoint)
 
@@ -212,7 +214,7 @@ describe CircuitProbes::Run, type: :operation do
       end
 
       it 'does not count a client error towards the failure streak' do
-        allow(http_client).to receive(:post).and_return(http_result(status: 400))
+        expect(http_client).to receive(:post).once.and_return(http_result(status: 400))
 
         expect { operation.call(endpoint: endpoint) }
           .not_to(change { endpoint.reload.circuit_failure_count })
@@ -222,7 +224,7 @@ describe CircuitProbes::Run, type: :operation do
       it 'disables the endpoint when the probe fails after the persisted deadline' do
         open_circuit(disable_at: now - 1.second)
         message = held_message
-        allow(http_client).to receive(:post).and_return(http_result(status: 500))
+        expect(http_client).to receive(:post).once.and_return(http_result(status: 500))
 
         operation.call(endpoint: endpoint)
 
@@ -237,7 +239,7 @@ describe CircuitProbes::Run, type: :operation do
 
       it 'still disables the endpoint when it has no pending messages' do
         open_circuit(disable_at: now - 1.second)
-        allow(http_client).to receive(:post).and_return(http_result(status: 503))
+        expect(http_client).to receive(:post).once.and_return(http_result(status: 503))
 
         operation.call(endpoint: endpoint)
 
@@ -246,7 +248,7 @@ describe CircuitProbes::Run, type: :operation do
       end
 
       it 'closes the circuit for an endpoint that never delivered a message' do
-        allow(http_client).to receive(:post).and_return(http_result(status: 204))
+        expect(http_client).to receive(:post).once.and_return(http_result(status: 204))
 
         operation.call(endpoint: endpoint)
 
@@ -263,11 +265,10 @@ describe CircuitProbes::Run, type: :operation do
       end
 
       it 'records a failed probe instead of sending an unsigned probe' do
-        allow(http_client).to receive(:post)
+        expect(http_client).not_to receive(:post)
 
         operation.call(endpoint: endpoint)
 
-        expect(http_client).not_to have_received(:post)
         probe = endpoint.reload.last_circuit_probe
         expect(probe).to be_failed
         expect(probe.error_type).to eq(described_class::MISSING_SECRET_ERROR_TYPE)
@@ -279,18 +280,16 @@ describe CircuitProbes::Run, type: :operation do
 
     context 'when the circuit is not open' do
       it 'sends nothing for an enabled endpoint' do
-        allow(http_client).to receive(:post)
+        expect(http_client).not_to receive(:post)
 
         expect { operation.call(endpoint: endpoint) }.not_to change(CircuitProbe, :count)
-        expect(http_client).not_to have_received(:post)
       end
 
       it 'sends nothing for a disabled endpoint' do
         endpoint.disable_circuit!
-        allow(http_client).to receive(:post)
+        expect(http_client).not_to receive(:post)
 
         expect { operation.call(endpoint: endpoint) }.not_to change(CircuitProbe, :count)
-        expect(http_client).not_to have_received(:post)
         expect(endpoint.reload).to be_disabled
       end
     end
@@ -298,11 +297,9 @@ describe CircuitProbes::Run, type: :operation do
     context 'when the next probe is not due yet' do
       it 'sends nothing and keeps the schedule untouched' do
         open_circuit(next_probe_at: now + 1.minute)
-        allow(http_client).to receive(:post)
+        expect(http_client).not_to receive(:post)
 
         operation.call(endpoint: endpoint)
-
-        expect(http_client).not_to have_received(:post)
         expect(endpoint.circuit_probes).to be_empty
         expect(endpoint.reload.circuit_next_probe_at).to eq(now + 1.minute)
       end
@@ -311,26 +308,22 @@ describe CircuitProbes::Run, type: :operation do
     context 'when another probe is in flight' do
       it 'never runs a concurrent probe for the same endpoint' do
         open_circuit
-        endpoint.update!(circuit_probe_lease_expires_at: now + 30.seconds)
-        allow(http_client).to receive(:post)
+        endpoint.update_columns(circuit_probe_lease_expires_at: now + 30.seconds)
+        expect(http_client).not_to receive(:post)
 
         operation.call(endpoint: endpoint)
-
-        expect(http_client).not_to have_received(:post)
         expect(endpoint.circuit_probes).to be_empty
         expect(endpoint.reload.circuit_probe_lease_expires_at).to eq(now + 30.seconds)
       end
 
       it 'ignores a duplicate job that runs while the first probe is sending' do
         open_circuit
-        allow(http_client).to receive(:post) do
+        expect(http_client).to receive(:post).once do
           described_class.new(http_client: http_client, signer: signer).call(endpoint: endpoint)
           http_result(status: 503)
         end
 
         operation.call(endpoint: endpoint)
-
-        expect(http_client).to have_received(:post).once
         expect(endpoint.circuit_probes.count).to eq(1)
         expect(endpoint.reload.circuit_probe_lease_expires_at).to be_nil
       end
@@ -348,8 +341,8 @@ describe CircuitProbes::Run, type: :operation do
           request_body: '{}'
         )
         stale.update_columns(created_at: now - 10.minutes)
-        endpoint.update!(circuit_probe_lease_expires_at: now - 1.minute)
-        allow(http_client).to receive(:post).and_return(http_result(status: 200))
+        endpoint.update_columns(circuit_probe_lease_expires_at: now - 1.minute)
+        expect(http_client).to receive(:post).once.and_return(http_result(status: 200))
 
         operation.call(endpoint: endpoint)
 
@@ -357,7 +350,6 @@ describe CircuitProbes::Run, type: :operation do
         expect(stale).to be_failed
         expect(stale.error_type).to eq(CircuitProbe::LEASE_EXPIRED_ERROR_TYPE)
         expect(stale.completed_at).to eq(now)
-        expect(http_client).to have_received(:post).once
         expect(endpoint.reload.circuit_probes.count).to eq(2)
       end
     end
@@ -366,7 +358,7 @@ describe CircuitProbes::Run, type: :operation do
       it 'records the evidence but leaves the circuit to the new owner' do
         open_circuit
         taken_over_at = now + 10.seconds
-        allow(http_client).to receive(:post) do
+        expect(http_client).to receive(:post).once do
           endpoint.update_columns(
             circuit_state: 'circuit_open',
             circuit_probe_lease_expires_at: taken_over_at,

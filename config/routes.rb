@@ -65,7 +65,6 @@ Rails.application.routes.draw do
           resources :replays, only: %i[create show] do
             post :preview, on: :collection
           end
-
           resources :api_credentials, only: %i[index create] do
             post :revoke, on: :member
           end
