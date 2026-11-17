@@ -107,6 +107,16 @@ describe Replays::Deliver, type: :operation do
 
       expect(endpoint.reload.circuit_failure_count).to eq(0)
     end
+
+    it 'does not reserve delivery quota when the item is claimed' do
+      account = project.effective_billing_owner
+      UserUsagePeriod.reserve_deliveries!(user: account, quantity: 1, limit: 10)
+      item.update!(quota_reserved_at: Time.current)
+
+      deliver(http_result(status: 200))
+
+      expect(account.deliveries_used_in_period).to eq(1)
+    end
   end
 
   describe 'claim guards' do

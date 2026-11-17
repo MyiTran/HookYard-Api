@@ -84,6 +84,21 @@ describe 'Projects::Replays', type: :request do
 
       expect(response).to have_http_status(:forbidden)
     end
+
+    it 'rejects a bulk replay that would exceed the monthly delivery limit' do
+      failed_message
+      account = project.effective_billing_owner
+      limit = Plans::Entitlements.monthly_delivery_limit(account)
+      UserUsagePeriod.reserve_deliveries!(user: account, quantity: limit, limit: limit)
+
+      post replays_path(project.id), headers: auth_headers(maintainer)
+
+      expect(response).to have_http_status(:payment_required)
+      body = JSON.parse(response.body)
+      expect(body['error']).to eq('plan_limit_exceeded')
+      expect(body['status']).to eq(402)
+      expect(body['errors']).to contain_exactly(hash_including('field' => 'monthly_delivery_limit'))
+    end
   end
 
   describe 'GET /api/v1/projects/:project_id/replays/:id' do

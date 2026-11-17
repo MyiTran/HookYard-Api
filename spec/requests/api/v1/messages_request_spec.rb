@@ -612,6 +612,20 @@ describe 'Messages', type: :request do
       expect(response).to have_http_status(:unprocessable_entity)
     end
 
+    it 'rejects a replay that would exceed the monthly delivery limit' do
+      message = create(:message, event: event, endpoint: endpoint, status: :failed, terminal_at: Time.current)
+      account = project.effective_billing_owner
+      limit = Plans::Entitlements.monthly_delivery_limit(account)
+      UserUsagePeriod.reserve_deliveries!(user: account, quantity: limit, limit: limit)
+
+      post "/api/v1/messages/#{message.id}/replay", headers: auth_headers(user)
+
+      expect(response).to have_http_status(:payment_required)
+      body = JSON.parse(response.body)
+      expect(body['error']).to eq('plan_limit_exceeded')
+      expect(body['status']).to eq(402)
+    end
+
     it 'does not expose a message of another project' do
       other_message = create(:message, status: :failed, terminal_at: Time.current)
 

@@ -39,6 +39,19 @@ describe Replays::Create, type: :operation do
         expect(job).to have_received(:perform_later).with(run.replay_items.sole.id)
       end
 
+      it 'reserves one delivery quota for the project billing owner' do
+        run = operation.call(message: message, actor: actor)
+
+        expect(project.effective_billing_owner.deliveries_used_in_period).to eq(1)
+        expect(run.replay_items.sole.quota_reserved?).to be(true)
+      end
+
+      it 'does not charge the replaying actor when they are not the billing owner' do
+        operation.call(message: message, actor: actor)
+
+        expect(actor.deliveries_used_in_period).to eq(0)
+      end
+
       context 'when the endpoint circuit is open' do
         before { endpoint.update!(circuit_state: :circuit_open) }
 
@@ -120,6 +133,47 @@ describe Replays::Create, type: :operation do
       it 'rejects the duplicate replay' do
         expect { operation.call(message: message, actor: actor) }
           .to raise_error(ApiError::UnprocessableEntityError, described_class::REASON_MESSAGES.fetch(Replays::Eligibility::REASON_REPLAY_IN_PROGRESS))
+      end
+    end
+
+    context 'when the project billing owner reached the monthly delivery limit' do
+      let(:account) { project.effective_billing_owner }
+      let(:limit) { Plans::Entitlements.monthly_delivery_limit(account) }
+
+      before do
+        eligible_failed_message
+        UserUsagePeriod.reserve_deliveries!(user: account, quantity: limit, limit: limit)
+      end
+
+      it 'rejects the replay with a payment required error and creates nothing' do
+        expect { operation.call(message: message, actor: actor) }
+          .to raise_error(ApiError::PlanLimitExceededError) { |error|
+            expect(error.status).to eq(402)
+            expect(error.code).to eq('plan_limit_exceeded')
+            expect(error.used).to eq(limit)
+            expect(error.limit).to eq(limit)
+          }
+
+        expect(ReplayRun.count).to eq(0)
+        expect(ReplayItem.count).to eq(0)
+        expect(account.deliveries_used_in_period).to eq(limit)
+        expect(job).not_to have_received(:perform_later)
+      end
+    end
+
+    context 'when the project uses a legacy owner membership as billing owner' do
+      let(:legacy_owner) { create(:user, :pro) }
+      let(:project) { create(:project).tap { |record| record.update_columns(billing_owner_id: nil) } }
+
+      before do
+        create(:project_membership, project: project, user: legacy_owner, role: :owner)
+        eligible_failed_message
+      end
+
+      it 'reserves the replay against the effective billing owner' do
+        operation.call(message: message, actor: actor)
+
+        expect(legacy_owner.deliveries_used_in_period).to eq(1)
       end
     end
 
