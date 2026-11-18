@@ -24,12 +24,14 @@ describe Replays::BulkJob, type: :job do
   end
 
   describe '#perform' do
-    it 'snapshots candidates before enqueuing deliveries' do
+    it 'runs snapshot before enqueuing deliveries and materializes items first' do
       failed_message
 
-      expect(Replays::EnqueueDeliveries).to receive(:call).with(run: run).once do
+      expect(Replays::Snapshot).to receive(:call).ordered.and_call_original
+      expect(Replays::EnqueueDeliveries).to receive(:call).with(run: run).ordered.once do
         expect(run.reload.replay_items.count).to eq(1)
         expect(run.requested_count).to eq(1)
+        expect(run.materialized_at).to be_nil
       end
 
       described_class.perform_now(run.id)
@@ -108,6 +110,7 @@ describe Replays::BulkJob, type: :job do
         described_class.perform_now(run.id)
 
         expect(run.reload.replay_items.count).to eq(1)
+        expect(run.reload.materialized_at).to be_present
         expect(project.effective_billing_owner.deliveries_used_in_period).to eq(1)
         expect(Replays::DeliverJob).to have_received(:perform_later).once
 
@@ -116,6 +119,36 @@ describe Replays::BulkJob, type: :job do
         expect(run.reload.replay_items.count).to eq(1)
         expect(project.effective_billing_owner.deliveries_used_in_period).to eq(1)
         expect(Replays::DeliverJob).to have_received(:perform_later).once
+      end
+    end
+
+    context 'when the snapshot succeeds but the delivery enqueue fails' do
+      before do
+        failed_message
+        allow(Replays::DeliverJob).to receive(:perform_later)
+      end
+
+      it 'retries without double-reserving and enqueues the missing delivery' do
+        calls = 0
+        allow(Replays::EnqueueDeliveries).to receive(:call) do |run:|
+          calls += 1
+          raise StandardError, 'transient enqueue failure' if calls == 1
+
+          Replays::EnqueueDeliveries.new.call(run: run)
+        end
+
+        expect { described_class.perform_now(run.id) }.to raise_error(StandardError, 'transient enqueue failure')
+
+        expect(run.reload.replay_items.count).to eq(1)
+        expect(project.effective_billing_owner.deliveries_used_in_period).to eq(1)
+        expect(run.materialized_at).to be_nil
+
+        described_class.perform_now(run.id)
+
+        expect(run.reload.replay_items.count).to eq(1)
+        expect(project.effective_billing_owner.deliveries_used_in_period).to eq(1)
+        expect(Replays::DeliverJob).to have_received(:perform_later).once
+        expect(run.materialized_at).to be_present
       end
     end
   end
