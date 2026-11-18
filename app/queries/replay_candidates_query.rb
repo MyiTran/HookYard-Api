@@ -32,7 +32,7 @@ class ReplayCandidatesQuery < MessagesQuery
 
   def base_scope(scope, as_of = nil)
     scope = scope.where(status: FAILED_STATUS)
-    scope = scope.where(messages: { updated_at: ..as_of }) if as_of
+    scope = scope.where(terminal_at: ..as_of) if as_of
 
     with_attempt_summary(scope).preload(:event, :endpoint, endpoint: :project)
   end

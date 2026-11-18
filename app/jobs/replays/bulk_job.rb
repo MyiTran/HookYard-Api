@@ -6,7 +6,15 @@ module Replays
     discard_on ActiveRecord::RecordNotFound
 
     def perform(replay_run_id)
-      Replays::EnqueueDeliveries.call(run: ReplayRun.find(replay_run_id))
+      run = ReplayRun.find(replay_run_id)
+      return if run.failed?
+
+      Replays::Snapshot.call(run: run, as_of: run.as_of)
+      Replays::EnqueueDeliveries.call(run: run)
+    rescue ApiError::PlanLimitExceededError
+      run.fail!(reason: ReplayRun::FAILURE_REASON_QUOTA)
+    rescue ApiError::BulkReplayLimitExceededError
+      run.fail!(reason: ReplayRun::FAILURE_REASON_OVER_LIMIT)
     end
   end
 end

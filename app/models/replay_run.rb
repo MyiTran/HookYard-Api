@@ -3,6 +3,9 @@
 # Table name: replay_runs
 #
 #  id              :uuid             not null, primary key
+#  as_of           :datetime
+#  failed_at       :datetime
+#  failure_reason  :string
 #  filters         :jsonb            not null
 #  materialized_at :datetime
 #  mode            :string           default("single"), not null
@@ -31,6 +34,11 @@ class ReplayRun < ApplicationRecord
   STATUS_QUEUED = 'queued'
   STATUS_RUNNING = 'running'
   STATUS_COMPLETED = 'completed'
+  STATUS_FAILED = 'failed'
+
+  FAILURE_REASON_QUOTA = 'monthly_delivery_limit_exceeded'
+  FAILURE_REASON_OVER_LIMIT = 'bulk_replay_limit_exceeded'
+  FAILURE_REASONS = [FAILURE_REASON_QUOTA, FAILURE_REASON_OVER_LIMIT].freeze
 
   FILTER_KEYS = %w[q message_id request_id endpoint_id event_type from to order].freeze
 
@@ -40,6 +48,7 @@ class ReplayRun < ApplicationRecord
 
   validates :mode, inclusion: { in: MODES }
   validates :requested_count, numericality: { only_integer: true, greater_than_or_equal_to: 0 }
+  validates :failure_reason, inclusion: { in: FAILURE_REASONS }, allow_nil: true
 
   def self.normalized_filters(filters)
     filters.to_h.stringify_keys.slice(*FILTER_KEYS).compact_blank
@@ -47,6 +56,14 @@ class ReplayRun < ApplicationRecord
 
   def progress
     @progress ||= build_progress
+  end
+
+  def failed?
+    failed_at.present?
+  end
+
+  def fail!(reason:, at: Time.current)
+    update!(failed_at: at, failure_reason: reason)
   end
 
   private
@@ -72,6 +89,7 @@ class ReplayRun < ApplicationRecord
   end
 
   def run_status(counts)
+    return STATUS_FAILED if failed_at.present?
     return STATUS_QUEUED if materialized_at.nil?
 
     counts.slice(*ReplayItem::ACTIVE_STATUSES).empty? ? STATUS_COMPLETED : STATUS_RUNNING

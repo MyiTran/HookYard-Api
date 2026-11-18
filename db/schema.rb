@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_11_03_110300) do
+ActiveRecord::Schema[8.0].define(version: 2026_11_05_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -314,6 +314,9 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_03_110300) do
     t.datetime "materialized_at"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.datetime "as_of"
+    t.datetime "failed_at"
+    t.string "failure_reason"
     t.index ["actor_id"], name: "index_replay_runs_on_actor_id"
     t.index ["project_id", "created_at"], name: "index_replay_runs_on_project_id_and_created_at"
     t.index ["project_id"], name: "index_replay_runs_on_project_id"
