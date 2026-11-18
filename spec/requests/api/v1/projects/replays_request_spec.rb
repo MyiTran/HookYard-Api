@@ -58,7 +58,7 @@ describe 'Projects::Replays', type: :request do
   end
 
   describe 'POST /api/v1/projects/:project_id/replays' do
-    it 'creates a bulk replay run for a member' do
+    it 'creates a queued bulk replay run without materializing candidates' do
       failed_message
 
       post replays_path(project.id), headers: auth_headers(maintainer)
@@ -68,6 +68,9 @@ describe 'Projects::Replays', type: :request do
       expect(body['mode']).to eq(ReplayRun::MODE_BULK)
       expect(body['project_id']).to eq(project.id)
       expect(body['status']).to eq(ReplayRun::STATUS_QUEUED)
+      expect(body['requested_count']).to eq(0)
+      expect(body['as_of']).to be_present
+      expect(ReplayItem.count).to eq(0)
     end
 
     it 'does not let a non-member create a recovery' do
@@ -85,7 +88,7 @@ describe 'Projects::Replays', type: :request do
       expect(response).to have_http_status(:forbidden)
     end
 
-    it 'rejects a bulk replay that would exceed the monthly delivery limit' do
+    it 'accepts a bulk replay when the monthly limit is already reached and defers the failure to the job' do
       failed_message
       account = project.effective_billing_owner
       limit = Plans::Entitlements.monthly_delivery_limit(account)
@@ -93,11 +96,11 @@ describe 'Projects::Replays', type: :request do
 
       post replays_path(project.id), headers: auth_headers(maintainer)
 
-      expect(response).to have_http_status(:payment_required)
+      expect(response).to have_http_status(:accepted)
       body = JSON.parse(response.body)
-      expect(body['error']).to eq('plan_limit_exceeded')
-      expect(body['status']).to eq(402)
-      expect(body['errors']).to contain_exactly(hash_including('field' => 'monthly_delivery_limit'))
+      expect(body['status']).to eq(ReplayRun::STATUS_QUEUED)
+      expect(body['requested_count']).to eq(0)
+      expect(ReplayItem.count).to eq(0)
     end
   end
 
@@ -121,6 +124,20 @@ describe 'Projects::Replays', type: :request do
       get replay_path(project.id, run.id), headers: auth_headers(maintainer)
 
       expect(response).to have_http_status(:not_found)
+    end
+
+    it 'returns a failed run with its failure reason' do
+      run = create(:replay_run, project: project, actor: maintainer, mode: ReplayRun::MODE_BULK,
+                                materialized_at: nil, requested_count: 0,
+                                failed_at: Time.current, failure_reason: ReplayRun::FAILURE_REASON_QUOTA)
+
+      get replay_path(project.id, run.id), headers: auth_headers(maintainer)
+
+      expect(response).to have_http_status(:ok)
+      body = JSON.parse(response.body)
+      expect(body['status']).to eq(ReplayRun::STATUS_FAILED)
+      expect(body['failure_reason']).to eq(ReplayRun::FAILURE_REASON_QUOTA)
+      expect(body['failed_at']).to be_present
     end
   end
 end

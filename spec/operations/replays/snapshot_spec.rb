@@ -13,7 +13,8 @@ describe Replays::Snapshot, type: :operation do
   before { travel_to(as_of) }
 
   def failed_message(**attributes)
-    create(:message, project: project, endpoint: endpoint, status: :failed, **attributes)
+    create(:message, project: project, endpoint: endpoint, status: :failed,
+                     terminal_at: Time.current, **attributes)
   end
 
   describe '.call' do

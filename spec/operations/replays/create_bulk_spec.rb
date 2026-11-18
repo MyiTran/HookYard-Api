@@ -4,7 +4,6 @@ describe Replays::CreateBulk, type: :operation do
   let(:project) { create(:project, :pro, :with_owner) }
   let(:actor) { project.owner }
   let(:endpoint) { create(:endpoint, project: project) }
-  let(:event) { create(:event, project: project) }
   let(:job) { class_double(Replays::BulkJob, perform_later: nil) }
   let(:operation) { described_class.new(job: job) }
 
@@ -16,7 +15,7 @@ describe Replays::CreateBulk, type: :operation do
         .to raise_error(ApiError::NotAuthorizedError, described_class::PLAN_REQUIRED_MESSAGE)
     end
 
-    it 'creates a bulk run and snapshots the eligible failed messages' do
+    it 'creates a queued bulk run without materializing candidates' do
       create(:message, project: project, endpoint: endpoint, status: :failed)
 
       run = operation.call(project: project, actor: actor, filters: { endpoint_id: endpoint.id })
@@ -24,10 +23,38 @@ describe Replays::CreateBulk, type: :operation do
       expect(run).to be_persisted
       expect(run.mode).to eq(ReplayRun::MODE_BULK)
       expect(run.materialized_at).to be_nil
+      expect(run.as_of).to be_present
       expect(run.filters).to eq('endpoint_id' => endpoint.id)
-      expect(run.requested_count).to eq(1)
-      expect(run.replay_items.count).to eq(1)
+      expect(run.requested_count).to eq(0)
+      expect(run.replay_items).to be_empty
       expect(job).to have_received(:perform_later).with(run.id)
+    end
+
+    it 'does not snapshot or reserve quota during the request' do
+      create(:message, project: project, endpoint: endpoint, status: :failed)
+      expect(Replays::Snapshot).not_to receive(:call)
+      expect(Plans::Quota).not_to receive(:reserve_deliveries!)
+
+      operation.call(project: project, actor: actor, filters: { endpoint_id: endpoint.id })
+
+      expect(project.effective_billing_owner.deliveries_used_in_period).to eq(0)
+    end
+
+    it 'enqueues the bulk job with the persisted run id' do
+      run = operation.call(project: project, actor: actor, filters: {})
+
+      expect(job).to have_received(:perform_later).with(run.id)
+      expect(ReplayRun.find(run.id)).to eq(run)
+    end
+
+    it 'captures the snapshot cutoff once when the run is created' do
+      frozen = Time.zone.local(2026, 1, 1, 12, 0, 0)
+
+      travel_to(frozen) do
+        run = operation.call(project: project, actor: actor, filters: {})
+
+        expect(run.as_of).to eq(frozen)
+      end
     end
 
     it 'rejects a pro maintainer when the project billing owner is free' do
@@ -40,15 +67,14 @@ describe Replays::CreateBulk, type: :operation do
         .to raise_error(ApiError::NotAuthorizedError, described_class::PLAN_REQUIRED_MESSAGE)
     end
 
-    it 'allows a free maintainer when the project billing owner is pro and charges the owner' do
+    it 'allows a free maintainer when the project billing owner is pro' do
       free_maintainer = create(:user)
       create(:project_membership, project: project, user: free_maintainer, role: :maintainer)
-      create(:message, project: project, endpoint: endpoint, status: :failed)
 
-      run = operation.call(project: project, actor: free_maintainer, filters: { endpoint_id: endpoint.id })
+      run = operation.call(project: project, actor: free_maintainer, filters: {})
 
       expect(run).to be_persisted
-      expect(project.effective_billing_owner.deliveries_used_in_period).to eq(1)
+      expect(project.effective_billing_owner.deliveries_used_in_period).to eq(0)
       expect(free_maintainer.deliveries_used_in_period).to eq(0)
     end
 
@@ -57,54 +83,15 @@ describe Replays::CreateBulk, type: :operation do
       let(:limit) { Plans::Entitlements.monthly_delivery_limit(account) }
 
       before do
-        create(:message, project: project, endpoint: endpoint, status: :failed)
         UserUsagePeriod.reserve_deliveries!(user: account, quantity: limit, limit: limit)
       end
 
-      it 'rejects the bulk replay with a payment required error and creates nothing' do
-        expect { operation.call(project: project, actor: actor, filters: { endpoint_id: endpoint.id }) }
-          .to raise_error(ApiError::PlanLimitExceededError) { |error|
-            expect(error.status).to eq(402)
-            expect(error.code).to eq('plan_limit_exceeded')
-          }
+      it 'still accepts the run and defers the quota outcome to the job' do
+        run = operation.call(project: project, actor: actor, filters: {})
 
-        expect(ReplayRun.count).to eq(0)
-        expect(ReplayItem.count).to eq(0)
-        expect(account.deliveries_used_in_period).to eq(limit)
-        expect(job).not_to have_received(:perform_later)
-      end
-    end
-
-    context 'when a snapshot candidate conflicts with an existing active replay item' do
-      let(:message_a) { create(:message, project: project, endpoint: endpoint, status: :failed) }
-      let(:message_b) { create(:message, project: project, endpoint: endpoint, status: :failed) }
-
-      before do
-        create(:replay_item, message: message_a, endpoint: endpoint, status: ReplayItem::QUEUED_STATUS)
-        allow(ReplayCandidatesQuery).to receive(:call).and_return(Message.where(id: [message_a.id, message_b.id]))
-      end
-
-      it 'reserves quota only for the item actually inserted' do
-        run = operation.call(project: project, actor: actor, filters: { endpoint_id: endpoint.id })
-
-        expect(run.replay_items.count).to eq(1)
-        expect(run.replay_items.pluck(:message_id)).to contain_exactly(message_b.id)
-        expect(project.effective_billing_owner.deliveries_used_in_period).to eq(1)
-        expect(run.replay_items.sole.quota_reserved?).to be(true)
-      end
-    end
-
-    context 'when a re-snapshot inserts no items' do
-      before { create(:message, project: project, endpoint: endpoint, status: :failed) }
-
-      it 'does not reserve quota for the second run' do
-        first = operation.call(project: project, actor: actor, filters: { endpoint_id: endpoint.id })
-        expect(first.replay_items.count).to eq(1)
-        expect(project.effective_billing_owner.deliveries_used_in_period).to eq(1)
-
-        second = operation.call(project: project, actor: actor, filters: { endpoint_id: endpoint.id })
-        expect(second.replay_items.count).to eq(0)
-        expect(project.effective_billing_owner.deliveries_used_in_period).to eq(1)
+        expect(run).to be_persisted
+        expect(run.requested_count).to eq(0)
+        expect(job).to have_received(:perform_later).with(run.id)
       end
     end
 
@@ -114,14 +101,13 @@ describe Replays::CreateBulk, type: :operation do
 
       before do
         create(:project_membership, project: project, user: legacy_owner, role: :owner)
-        create(:message, project: project, endpoint: endpoint, status: :failed)
       end
 
-      it 'reserves the bulk replay against the effective billing owner' do
-        run = operation.call(project: project, actor: legacy_owner, filters: { endpoint_id: endpoint.id })
+      it 'creates the run without reserving quota during the request' do
+        run = operation.call(project: project, actor: legacy_owner, filters: {})
 
         expect(run).to be_persisted
-        expect(legacy_owner.deliveries_used_in_period).to eq(1)
+        expect(legacy_owner.deliveries_used_in_period).to eq(0)
       end
     end
   end

@@ -93,14 +93,30 @@ describe ReplayCandidatesQuery do
         .to contain_exactly('order.created')
     end
 
-    it 'excludes messages updated after the frozen instant' do
+    it 'excludes messages that terminally failed after the frozen instant' do
       frozen = Time.zone.local(2026, 1, 1, 12, 0, 0)
       before = create(:message, project: project, endpoint: endpoint, status: :failed)
-      before.update_columns(updated_at: frozen - 1.minute)
+      before.update_columns(terminal_at: frozen - 1.minute)
       after = create(:message, project: project, endpoint: endpoint, status: :failed)
-      after.update_columns(updated_at: frozen + 1.minute)
+      after.update_columns(terminal_at: frozen + 1.minute)
 
       expect(eligible_results(as_of: frozen).map(&:id)).to contain_exactly(before.id)
+    end
+
+    it 'includes a message that terminally failed before the cutoff even when it was updated later' do
+      frozen = Time.zone.local(2026, 1, 1, 12, 0, 0)
+      message = create(:message, project: project, endpoint: endpoint, status: :failed)
+      message.update_columns(terminal_at: frozen - 1.minute, updated_at: frozen + 1.hour)
+
+      expect(eligible_results(as_of: frozen).map(&:id)).to contain_exactly(message.id)
+    end
+
+    it 'includes a message whose terminal timestamp equals the cutoff' do
+      frozen = Time.zone.local(2026, 1, 1, 12, 0, 0)
+      message = create(:message, project: project, endpoint: endpoint, status: :failed)
+      message.update_columns(terminal_at: frozen)
+
+      expect(eligible_results(as_of: frozen).map(&:id)).to contain_exactly(message.id)
     end
 
     it 'does not leak messages of another project' do
