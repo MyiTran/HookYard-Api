@@ -9,12 +9,13 @@ module Replays
     def call(project:, actor:, filters:)
       raise ApiError::NotAuthorizedError.new(PLAN_REQUIRED_MESSAGE) unless project.pro?
 
+      as_of = Time.current
       run = ReplayRun.create!(
         project: project,
         actor: actor,
         mode: ReplayRun::MODE_BULK,
         filters: ReplayRun.normalized_filters(filters),
-        as_of: Time.current
+        as_of: as_of
       )
 
       job.perform_later(run.id)

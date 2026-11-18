@@ -8,6 +8,7 @@ module Replays
     def perform(replay_run_id)
       run = ReplayRun.find(replay_run_id)
       return if run.failed?
+      return if run.materialized_at.present?
 
       Replays::Snapshot.call(run: run, as_of: run.as_of)
       Replays::EnqueueDeliveries.call(run: run)
