@@ -584,12 +584,13 @@ describe 'Projects::Endpoints', type: :request do
         'disable_window_ends_at' => nil,
         'next_probe_at' => nil,
         'probe_in_flight' => false,
-        'held_message_count' => 0,
+        'held_count' => 0,
         'last_probe' => nil
       )
       expect(json_response['queue']).to eq(
         'state' => 'ok',
-        'queued_count' => 0,
+        'backlog_total' => 0,
+        'dispatchable_count' => 0,
         'capacity' => 10_000
       )
     end
@@ -603,8 +604,7 @@ describe 'Projects::Endpoints', type: :request do
         circuit_opened_at: opened_at,
         circuit_disable_at: opened_at + 5.days,
         circuit_next_probe_at: opened_at + 1.minute,
-        circuit_probe_lease_expires_at: opened_at + 1.minute,
-        queued_message_count: 9_000
+        circuit_probe_lease_expires_at: opened_at + 1.minute
       )
       create(:message, project: project, endpoint: endpoint).update_columns(
         queued_at: opened_at, held_at: opened_at, hold_reason: 'endpoint_circuit_open'
@@ -618,10 +618,35 @@ describe 'Projects::Endpoints', type: :request do
       expect(circuit['state']).to eq('circuit_open')
       expect(circuit['failure_count']).to eq(5)
       expect(circuit['probe_in_flight']).to be(true)
-      expect(circuit['held_message_count']).to eq(1)
+      expect(circuit['held_count']).to eq(1)
       expect(Time.zone.parse(circuit['disable_window_ends_at'])).to eq(opened_at + 5.days)
-      expect(json_response['queue']).to eq('state' => 'warning', 'queued_count' => 9_000, 'capacity' => 10_000)
+      expect(json_response['queue']).to eq(
+        'state' => 'ok',
+        'backlog_total' => 1,
+        'dispatchable_count' => 0,
+        'capacity' => 10_000
+      )
       expect(json_response.keys).not_to include('circuit_probe_lease_expires_at')
+    end
+
+    it 'derives queue counters from live messages instead of the persisted projection' do
+      endpoint = create(:endpoint, project: project)
+      2.times do
+        create(:message, project: project, endpoint: endpoint).update_columns(
+          queued_at: Time.current, held_at: Time.current, hold_reason: 'endpoint_disabled'
+        )
+      end
+      endpoint.update_columns(queued_message_count: 1)
+
+      get "/api/v1/projects/#{project.id}/endpoints/#{endpoint.id}", headers: auth_headers(owner)
+
+      queue = json_response['queue']
+      held_count = json_response['circuit']['held_count']
+
+      expect(queue['backlog_total']).to eq(2)
+      expect(queue['dispatchable_count']).to eq(0)
+      expect(held_count).to eq(2)
+      expect(held_count).to be <= queue['backlog_total']
     end
 
     it 'keeps the persisted deadline stable when the environment changes between processes' do

@@ -334,6 +334,57 @@ describe Endpoint, type: :model do
       expect(endpoint.queue_state).to eq('full')
       expect(endpoint).to be_queue_full
     end
+
+    it 'uses the supplied backlog count for the state' do
+      endpoint = build(:endpoint, queued_message_count: 0)
+
+      expect(endpoint.queue_state(Webhooks::CircuitPolicy.warning_threshold)).to eq('warning')
+    end
+  end
+
+  describe 'delivery counters' do
+    it 'counts pending, retry scheduled, delivering, and held messages as backlog' do
+      endpoint = create(:endpoint)
+      create(:message, project: endpoint.project, endpoint: endpoint, status: :pending)
+      create(:message, project: endpoint.project, endpoint: endpoint, status: :pending, next_retry_at: Time.current)
+      create(:message, project: endpoint.project, endpoint: endpoint, status: :delivering)
+      create(:message, project: endpoint.project, endpoint: endpoint, status: :pending, held_at: Time.current, hold_reason: 'endpoint_disabled')
+      create(:message, project: endpoint.project, endpoint: endpoint, status: :succeeded)
+      create(:message, project: endpoint.project, endpoint: endpoint, status: :failed)
+
+      expect(endpoint.backlog_total).to eq(4)
+    end
+
+    it 'counts only pending held messages as held' do
+      endpoint = create(:endpoint)
+      create(:message, project: endpoint.project, endpoint: endpoint, status: :pending, held_at: Time.current, hold_reason: 'endpoint_disabled')
+      create(:message, project: endpoint.project, endpoint: endpoint, status: :pending, held_at: Time.current, hold_reason: 'endpoint_circuit_open')
+      create(:message, project: endpoint.project, endpoint: endpoint, status: :pending)
+      create(:message, project: endpoint.project, endpoint: endpoint, status: :delivering)
+
+      expect(endpoint.held_count).to eq(2)
+    end
+
+    it 'excludes held messages from dispatchable count' do
+      endpoint = create(:endpoint)
+      create(:message, project: endpoint.project, endpoint: endpoint, status: :pending)
+      create(:message, project: endpoint.project, endpoint: endpoint, status: :delivering)
+      create(:message, project: endpoint.project, endpoint: endpoint, status: :pending, held_at: Time.current, hold_reason: 'endpoint_disabled')
+
+      expect(endpoint.dispatchable_count).to eq(2)
+    end
+
+    it 'returns all three counters together' do
+      endpoint = create(:endpoint)
+      create(:message, project: endpoint.project, endpoint: endpoint, status: :pending)
+      create(:message, project: endpoint.project, endpoint: endpoint, status: :pending, held_at: Time.current, hold_reason: 'endpoint_disabled')
+
+      expect(endpoint.delivery_counts).to eq(
+        backlog_total: 2,
+        held_count: 1,
+        dispatchable_count: 1
+      )
+    end
   end
 
   describe '#circuit_disable_at' do

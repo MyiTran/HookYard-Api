@@ -138,6 +138,7 @@ module AdminDemo
         inserted[:delivery_attempts] += insert_rows(DeliveryAttempt, attempts)
       end
 
+      reconcile_endpoint_queue_counts
       inserted.merge(delivery_metrics: seed_delivery_metrics)
     end
 
@@ -145,6 +146,13 @@ module AdminDemo
       return 0 if rows.empty?
 
       model.insert_all(rows, unique_by: :id, returning: :id, record_timestamps: false).rows.size
+    end
+
+    def reconcile_endpoint_queue_counts
+      Message.where.not(status: %w[succeeded failed])
+             .group(:endpoint_id)
+             .count
+             .each { |endpoint_id, count| Endpoint.where(id: endpoint_id).update_all(queued_message_count: count) }
     end
 
     def delivery_rows(start, finish)
@@ -291,7 +299,7 @@ module AdminDemo
         endpoint_id: endpoint_id,
         status: status == :held ? Message::PENDING_STATUS : status.to_s,
         attempt_count: ATTEMPT_COUNT_FOR.fetch(status, 0),
-        queued_at: nil,
+        queued_at: status == :held ? updated_at : nil,
         held_at: status == :held ? updated_at : nil,
         hold_reason: status == :held ? hold_reason_for_endpoint(endpoint_index) : nil,
         next_retry_at: nil,

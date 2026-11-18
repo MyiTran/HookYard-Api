@@ -18,6 +18,7 @@ module Api
           endpoints,
           each_serializer: EndpointSerializer,
           plan_locks: EndpointPlanLocks.new(endpoints.map(&:project)),
+          delivery_counts: EndpointDeliveryCounts.new(endpoints),
           pagy: pagy
         )
       end

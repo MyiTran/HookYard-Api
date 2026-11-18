@@ -44,6 +44,17 @@ describe Messages::ReconcileQueue, type: :operation do
       expect(endpoint.reload.queued_message_count).to eq(2)
     end
 
+    it 'counts non-terminal messages even when their queue slot was never set' do
+      create(:message, project: project, endpoint: endpoint).update_columns(
+        queued_at: nil, held_at: Time.current, hold_reason: 'endpoint_disabled'
+      )
+      endpoint.update!(queued_message_count: 0)
+
+      described_class.call(endpoint: endpoint)
+
+      expect(endpoint.reload.queued_message_count).to eq(1)
+    end
+
     it 'is idempotent across repeated runs' do
       queued_message
       failed = queued_message

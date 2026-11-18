@@ -15,11 +15,13 @@ module Api
             order: params[:order]
           )
           pagy, endpoints = paginate(scope)
+          endpoints = endpoints.includes(:endpoint_signing_secrets, project: :billing_owner)
 
           render_resource_collection(
-            endpoints.includes(:endpoint_signing_secrets, project: :billing_owner),
+            endpoints,
             each_serializer: EndpointSerializer,
             plan_locks: EndpointPlanLocks.new([@project]),
+            delivery_counts: EndpointDeliveryCounts.new(endpoints),
             pagy: pagy
           )
         end

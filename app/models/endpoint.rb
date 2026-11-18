@@ -110,15 +110,34 @@ class Endpoint < ApplicationRecord
     !Webhooks::CircuitPolicy.capacity_available?(queued_message_count)
   end
 
-  def queue_state
-    return QUEUE_FULL_STATE if queue_full?
-    return QUEUE_WARNING_STATE if queued_message_count >= Webhooks::CircuitPolicy.warning_threshold
+  def queue_state(backlog_count = queued_message_count)
+    return QUEUE_FULL_STATE unless Webhooks::CircuitPolicy.capacity_available?(backlog_count)
+    return QUEUE_WARNING_STATE if backlog_count >= Webhooks::CircuitPolicy.warning_threshold
 
     QUEUE_OK_STATE
   end
 
-  def held_message_count
+  def backlog_total
+    messages.not_terminal.count
+  end
+
+  def held_count
     messages.pending.where.not(held_at: nil).count
+  end
+
+  def dispatchable_count
+    backlog_total - held_count
+  end
+
+  def delivery_counts
+    total = backlog_total
+    held = held_count
+
+    { backlog_total: total, held_count: held, dispatchable_count: total - held }
+  end
+
+  def held_message_count
+    held_count
   end
 
   def circuit_hold_reason

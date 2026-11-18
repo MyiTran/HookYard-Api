@@ -57,6 +57,21 @@ describe Messages::ReleaseHeld, type: :operation do
       expect(enqueued_message_ids).to contain_exactly(first.id, second.id)
     end
 
+    it 'moves released messages from held to dispatchable without changing backlog' do
+      held_message
+      queued_message
+
+      expect(endpoint.held_count).to eq(1)
+      expect(endpoint.dispatchable_count).to eq(1)
+      expect(endpoint.backlog_total).to eq(2)
+
+      described_class.call(endpoint: endpoint)
+
+      expect(endpoint.reload.held_count).to eq(0)
+      expect(endpoint.dispatchable_count).to eq(2)
+      expect(endpoint.backlog_total).to eq(2)
+    end
+
     it 'releases a pending message that never carried a hold and clears its stale retry' do
       stranded = queued_message
       stranded.update_columns(next_retry_at: 5.hours.from_now)

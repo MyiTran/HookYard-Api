@@ -91,6 +91,9 @@ describe Events::Ingest, type: :operation do
         expect(message).to be_held
         expect(message.hold_reason).to eq('endpoint_circuit_open')
         expect(endpoint.reload.queued_message_count).to eq(1)
+        expect(endpoint.held_count).to eq(1)
+        expect(endpoint.backlog_total).to eq(1)
+        expect(endpoint.dispatchable_count).to eq(0)
       end
     end
 

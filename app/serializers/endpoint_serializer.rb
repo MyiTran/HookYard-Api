@@ -19,7 +19,8 @@ class EndpointSerializer < ApplicationSerializer
     endpoint.current_signing_secret&.created_at
   end
 
-  field :circuit do |endpoint|
+  field :circuit do |endpoint, options|
+    counts = delivery_counts_for(endpoint, options)
     last_probe = endpoint.last_circuit_probe
 
     {
@@ -30,7 +31,7 @@ class EndpointSerializer < ApplicationSerializer
       disable_window_ends_at: endpoint.circuit_disable_at,
       next_probe_at: endpoint.circuit_next_probe_at,
       probe_in_flight: endpoint.probe_in_flight?,
-      held_message_count: endpoint.held_message_count,
+      held_count: counts.fetch(:held_count),
       last_probe: last_probe && CircuitProbeSerializer.render_as_hash(last_probe)
     }
   end
@@ -41,10 +42,14 @@ class EndpointSerializer < ApplicationSerializer
     locks ? locks.locked?(endpoint) : endpoint.project.plan_locked_endpoint_ids.include?(endpoint.id)
   end
 
-  field :queue do |endpoint|
+  field :queue do |endpoint, options|
+    counts = delivery_counts_for(endpoint, options)
+    backlog_total = counts.fetch(:backlog_total)
+
     {
-      state: endpoint.queue_state,
-      queued_count: endpoint.queued_message_count,
+      state: endpoint.queue_state(backlog_total),
+      backlog_total: backlog_total,
+      dispatchable_count: counts.fetch(:dispatchable_count),
       capacity: Webhooks::CircuitPolicy::QUEUE_CAPACITY
     }
   end
@@ -53,5 +58,9 @@ class EndpointSerializer < ApplicationSerializer
     field :signing_secret do |_endpoint, options|
       options[:signing_secret]
     end
+  end
+
+  def self.delivery_counts_for(endpoint, options)
+    options[:delivery_counts]&.for(endpoint) || endpoint.delivery_counts
   end
 end

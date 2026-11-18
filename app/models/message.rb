@@ -68,6 +68,7 @@ class Message < ApplicationRecord
   scope :not_held, -> { where(held_at: nil) }
   scope :held_by_circuit, -> { pending.held }
   scope :terminal, -> { where(status: %w[succeeded failed]) }
+  scope :not_terminal, -> { where.not(status: %w[succeeded failed]) }
 
   scope :due_for_delivery, lambda { |at = Time.current|
     pending.not_held.where.not(next_retry_at: nil).where(next_retry_at: ..at)
