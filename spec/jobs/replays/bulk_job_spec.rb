@@ -63,6 +63,33 @@ describe Replays::BulkJob, type: :job do
       described_class.perform_now(run.id)
     end
 
+    context 'when a failed message has no terminal timestamp' do
+      it 'materializes the same message that Preview reports as eligible' do
+        message = create(:message, project: project, endpoint: endpoint, status: :failed)
+
+        preview = Replays::Preview.call(project: project, filters: {})
+        expect(preview.eligible_count).to eq(1)
+
+        described_class.perform_now(run.id)
+
+        expect(run.reload.requested_count).to eq(1)
+        expect(run.replay_items.pluck(:message_id)).to contain_exactly(message.id)
+        expect(run.materialized_at).to be_present
+      end
+    end
+
+    context 'when no failed messages match the run' do
+      it 'completes with zero items and a materialized timestamp' do
+        create(:message, project: project, endpoint: endpoint, status: :pending)
+
+        described_class.perform_now(run.id)
+
+        expect(run.reload.progress[:status]).to eq(ReplayRun::STATUS_COMPLETED)
+        expect(run.replay_items).to be_empty
+        expect(run.materialized_at).to be_present
+      end
+    end
+
     context 'when the monthly quota is exhausted during snapshot' do
       let(:account) { project.effective_billing_owner }
       let(:limit) { Plans::Entitlements.monthly_delivery_limit(account) }

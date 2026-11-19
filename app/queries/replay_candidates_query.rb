@@ -32,9 +32,17 @@ class ReplayCandidatesQuery < MessagesQuery
 
   def base_scope(scope, as_of = nil)
     scope = scope.where(status: FAILED_STATUS)
-    scope = scope.where(terminal_at: ..as_of) if as_of
+    scope = terminal_failed_before(scope, as_of) if as_of
 
     with_attempt_summary(scope).preload(:event, :endpoint, endpoint: :project)
+  end
+
+  def terminal_failed_before(scope, as_of)
+    scope.where(
+      'messages.terminal_at <= ? OR (messages.terminal_at IS NULL AND messages.created_at <= ?)',
+      as_of,
+      as_of
+    )
   end
 
   def filtered_params(params)

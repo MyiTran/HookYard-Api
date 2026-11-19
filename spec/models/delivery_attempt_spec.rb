@@ -99,6 +99,70 @@ describe DeliveryAttempt, type: :model do
     end
   end
 
+  describe '.failed_for_diagnosis' do
+    let(:message) { create(:message) }
+
+    def attempt(**attributes)
+      create(:delivery_attempt, message: message, **attributes)
+    end
+
+    it 'includes unsuccessful HTTP responses' do
+      rejected = attempt(response_status: 400)
+      server_error = attempt(response_status: 500)
+      moved = attempt(response_status: 302)
+
+      expect(described_class.failed_for_diagnosis).to contain_exactly(rejected, server_error, moved)
+    end
+
+    it 'excludes successful HTTP responses' do
+      attempt(response_status: 200)
+      attempt(response_status: 201)
+      attempt(response_status: 202)
+      attempt(response_status: 204)
+
+      expect(described_class.failed_for_diagnosis).to be_empty
+    end
+
+    it 'includes transport failures that never received a response' do
+      timeout = attempt(error_type: Net::ReadTimeout.name, error_message: 'execution expired')
+      tls = attempt(error_type: OpenSSL::SSL::SSLError.name, error_message: 'certificate verify failed')
+      dns = attempt(error_type: SocketError.name, error_message: 'getaddrinfo: Name or service not known')
+      reset = attempt(error_type: Errno::ECONNRESET.name, error_message: 'connection reset by peer')
+
+      expect(described_class.failed_for_diagnosis).to contain_exactly(timeout, tls, dns, reset)
+    end
+
+    it 'excludes an attempt recorded with only an error message' do
+      attempt(error_message: 'connection closed before the response was read')
+
+      expect(described_class.failed_for_diagnosis).to be_empty
+    end
+
+    it 'excludes an attempt with an empty transport error and no response' do
+      attempt(error_type: '', error_message: 'no usable error class')
+
+      expect(described_class.failed_for_diagnosis).to be_empty
+    end
+
+    it 'excludes an attempt with a whitespace-only transport error and no response' do
+      attempt(error_type: '   ', error_message: 'no usable error class')
+
+      expect(described_class.failed_for_diagnosis).to be_empty
+    end
+
+    it 'excludes an attempt that is still in flight' do
+      attempt
+
+      expect(described_class.failed_for_diagnosis).to be_empty
+    end
+
+    it 'excludes a success that also carries transport error evidence' do
+      attempt(response_status: 200, error_type: Net::ReadTimeout.name, error_message: 'late error')
+
+      expect(described_class.failed_for_diagnosis).to be_empty
+    end
+  end
+
   describe 'evidence immutability' do
     it 'rejects changes to the recorded request once the attempt is stored' do
       attempt = create(:delivery_attempt)

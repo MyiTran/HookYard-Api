@@ -119,6 +119,24 @@ describe ReplayCandidatesQuery do
       expect(eligible_results(as_of: frozen).map(&:id)).to contain_exactly(message.id)
     end
 
+    it 'includes a legacy failed message with a NULL terminal timestamp created before the cutoff' do
+      frozen = Time.zone.local(2026, 1, 1, 12, 0, 0)
+      message = create(:message, project: project, endpoint: endpoint, status: :failed)
+      message.update_columns(terminal_at: nil, created_at: frozen - 1.minute)
+
+      expect(eligible_results(as_of: frozen).map(&:id)).to contain_exactly(message.id)
+      expect(requested_results(as_of: frozen).map(&:id)).to contain_exactly(message.id)
+    end
+
+    it 'excludes a failed message with a NULL terminal timestamp created after the cutoff' do
+      frozen = Time.zone.local(2026, 1, 1, 12, 0, 0)
+      message = create(:message, project: project, endpoint: endpoint, status: :failed)
+      message.update_columns(terminal_at: nil, created_at: frozen + 1.minute)
+
+      expect(eligible_results(as_of: frozen)).to be_empty
+      expect(requested_results(as_of: frozen)).to be_empty
+    end
+
     it 'does not leak messages of another project' do
       create(:message, project: project, endpoint: endpoint, status: :failed)
       create(:message, status: :failed)

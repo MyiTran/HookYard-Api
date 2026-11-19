@@ -44,6 +44,8 @@ class Endpoint < ApplicationRecord
   has_many :endpoint_signing_secrets, dependent: :destroy
   has_many :messages, dependent: :destroy
   has_many :replay_items, dependent: :destroy
+  has_many :endpoint_diagnoses, dependent: :destroy
+  has_many :delivery_attempts, through: :messages
   has_many :circuit_probes, dependent: :destroy
 
   scope :archived, -> { where.not(archived_at: nil) }
