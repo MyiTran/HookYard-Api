@@ -36,8 +36,6 @@ module Ai
       "suggested_action": <one concise, actionable sentence for the integration team>}.
     PROMPT
 
-    attr_reader :analyzed_attempt_count
-
     def initialize(api_key: ENV.fetch('GEMINI_API_KEY', nil),
                    model: ENV.fetch('AI_DIAGNOSIS_MODEL', DEFAULT_MODEL),
                    timeout_ms: ENV.fetch('AI_DIAGNOSIS_TIMEOUT_MS', DEFAULT_TIMEOUT_MS),
@@ -46,17 +44,14 @@ module Ai
       @model = model.presence || DEFAULT_MODEL
       @timeout_seconds = normalize_timeout_ms(timeout_ms)
       @transport = transport
-      @analyzed_attempt_count = 0
     end
 
     def call(attempts)
       contexts = prompt_contexts(attempts)
-      @analyzed_attempt_count = 0
 
       return nil unless deliverable?(contexts)
 
-      @analyzed_attempt_count = contexts.size
-      parse(request(contexts))
+      parse(request(contexts), contexts.size)
     rescue StandardError
       nil
     end
@@ -130,10 +125,10 @@ module Ai
       Webhooks::ResponseEvidence.normalize_external_text(Oj.dump(contexts, mode: :compat))
     end
 
-    def parse(result)
+    def parse(result, analyzed_attempt_count)
       return nil unless result.status.between?(200, 299)
 
-      build_result(**extract_answer(result.body))
+      build_result(**extract_answer(result.body), analyzed_attempt_count: analyzed_attempt_count)
     rescue JSON::ParserError, EncodingError, ArgumentError, TypeError
       nil
     end
@@ -146,7 +141,7 @@ module Ai
       { label: answer['label'], suggested_action: answer['suggested_action'] }
     end
 
-    def build_result(label:, suggested_action:)
+    def build_result(label:, suggested_action:, analyzed_attempt_count:)
       normalized_label = label.to_s
       action = suggested_action.to_s.strip
       return nil unless Diagnosis::LABELS.include?(normalized_label)
@@ -156,7 +151,8 @@ module Ai
         label: normalized_label,
         suggested_action: action,
         source: Diagnosis::SOURCE_AI,
-        model: model
+        model: model,
+        analyzed_attempt_count: analyzed_attempt_count
       )
     end
 

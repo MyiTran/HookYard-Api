@@ -207,30 +207,46 @@ describe Ai::GeminiFailureDiagnoser do
     end
 
     it 'reports exactly the contexts it put in the provider request' do
-      evidence = evidence_of(prompt_of(evidence_attempts(20)))
+      attempts = evidence_attempts(20)
+      captured = nil
+      allow(transport).to receive(:post_json) do |**arguments|
+        captured = arguments
+        valid_answer
+      end
 
-      expect(diagnoser.analyzed_attempt_count).to eq(evidence.size)
-      expect(diagnoser.analyzed_attempt_count).to be < 20
+      result = diagnoser.call(attempts)
+      prompt = Oj.load(captured[:body]).dig('contents', 0, 'parts', 0, 'text')
+      evidence = evidence_of(prompt)
+
+      expect(result.analyzed_attempt_count).to eq(evidence.size)
+      expect(result.analyzed_attempt_count).to be < 20
     end
 
     it 'reports every context when the whole evidence fits the budget' do
       allow(transport).to receive(:post_json).and_return(valid_answer)
 
-      diagnoser.call(evidence_attempts(3))
+      result = diagnoser.call(evidence_attempts(3))
 
-      expect(diagnoser.analyzed_attempt_count).to eq(3)
+      expect(result.analyzed_attempt_count).to eq(3)
+    end
+
+    it 'reports ten when all ten selected attempts fit the budget' do
+      attempts = evidence_attempts(10, body: Oj.dump({ 'error' => 'short' }, mode: :compat))
+      allow(transport).to receive(:post_json).and_return(valid_answer)
+
+      result = diagnoser.call(attempts)
+
+      expect(result.analyzed_attempt_count).to eq(10)
     end
 
     it 'reports the contexts of the current call when the same instance is reused' do
       allow(transport).to receive(:post_json).and_return(valid_answer)
 
-      diagnoser.call([build_stubbed(:delivery_attempt, response_status: 500)])
-      first_count = diagnoser.analyzed_attempt_count
+      first = diagnoser.call([build_stubbed(:delivery_attempt, response_status: 500)])
       second = diagnoser.call([])
 
-      expect(first_count).to be_positive
+      expect(first.analyzed_attempt_count).to be_positive
       expect(second).to be_nil
-      expect(diagnoser.analyzed_attempt_count).to eq(0)
       expect(transport).to have_received(:post_json).once
     end
 
@@ -238,7 +254,6 @@ describe Ai::GeminiFailureDiagnoser do
       allow(transport).to receive(:post_json)
 
       expect(diagnoser.call([])).to be_nil
-      expect(diagnoser.analyzed_attempt_count).to eq(0)
       expect(transport).not_to have_received(:post_json)
     end
 
@@ -247,7 +262,6 @@ describe Ai::GeminiFailureDiagnoser do
       allow(transport).to receive(:post_json)
 
       expect(diagnoser.call([attempt])).to be_nil
-      expect(diagnoser.analyzed_attempt_count).to eq(0)
       expect(transport).not_to have_received(:post_json)
     end
 
@@ -267,7 +281,6 @@ describe Ai::GeminiFailureDiagnoser do
       diagnoser = described_class.new(api_key: nil, transport: transport)
 
       expect(diagnoser.call([attempt])).to be_nil
-      expect(diagnoser.analyzed_attempt_count).to eq(0)
       expect(transport).not_to have_received(:post_json)
     end
 

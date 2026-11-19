@@ -5,7 +5,7 @@ describe 'Endpoint failure diagnoses', type: :request do
   let(:outsider) { create(:user) }
   let(:project) { create(:project, :with_owner, owner: owner) }
   let(:endpoint) { create(:endpoint, project: project) }
-  let(:diagnoser) { instance_double(Ai::GeminiFailureDiagnoser, call: nil, analyzed_attempt_count: 1) }
+  let(:diagnoser) { instance_double(Ai::GeminiFailureDiagnoser, call: nil) }
 
   before { allow(Ai::GeminiFailureDiagnoser).to receive(:new).and_return(diagnoser) }
 
@@ -48,14 +48,15 @@ describe 'Endpoint failure diagnoses', type: :request do
       end
 
       it 'returns the ai label when the provider answer is validated' do
-        allow(diagnoser).to receive(:call).and_return(
-          Ai::Diagnosis::Result.new(
-            label: Ai::Diagnosis::RATE_LIMITED,
-            suggested_action: 'Ask the receiver to accept a slower retry rate.',
-            source: Ai::Diagnosis::SOURCE_AI,
-            model: 'gemini-test-model'
-          )
-        )
+        create(:delivery_attempt, message: create(:message, project: project, endpoint: endpoint, status: :failed),
+                                  response_status: 400)
+        allow(diagnoser).to receive(:call).and_return(Ai::Diagnosis::Result.new(
+          label: Ai::Diagnosis::RATE_LIMITED,
+          suggested_action: 'Ask the receiver to accept a slower retry rate.',
+          source: Ai::Diagnosis::SOURCE_AI,
+          model: 'gemini-test-model',
+          analyzed_attempt_count: 1
+        ))
 
         diagnose
 
@@ -65,12 +66,23 @@ describe 'Endpoint failure diagnoses', type: :request do
       end
 
       it 'never leaks provider details when the provider answer is unusable' do
+        create(:delivery_attempt, message: create(:message, project: project, endpoint: endpoint, status: :failed),
+                                  response_status: 500)
         allow(diagnoser).to receive(:call).and_return(nil)
 
         diagnose
 
         expect(response).to have_http_status(:created)
         expect(response.body).not_to include('gemini', 'generativelanguage', 'candidates')
+      end
+
+      it 'returns an unprocessable entity when the endpoint has no failed delivery attempts' do
+        diagnose
+
+        expect(response).to have_http_status(:unprocessable_entity)
+        expect(json_response).to include('message' => EndpointDiagnoses::Create::NO_ATTEMPTS_MESSAGE)
+        expect(EndpointDiagnosis.count).to eq(0)
+        expect(diagnoser).not_to have_received(:call)
       end
 
       it 'does not enqueue delivery work or change delivery state' do

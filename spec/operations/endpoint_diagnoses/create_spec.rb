@@ -6,9 +6,8 @@ describe EndpointDiagnoses::Create, type: :operation do
   let(:endpoint) { create(:endpoint, project: project) }
   let(:message) { create(:message, project: project, endpoint: endpoint, status: :failed) }
   let(:ai_result) { nil }
-  let(:analyzed_attempt_count) { 1 }
   let(:diagnoser) do
-    instance_double(Ai::GeminiFailureDiagnoser, call: ai_result, analyzed_attempt_count: analyzed_attempt_count)
+    instance_double(Ai::GeminiFailureDiagnoser, call: ai_result)
   end
   let(:operation) { described_class.new(diagnoser: diagnoser) }
 
@@ -31,7 +30,8 @@ describe EndpointDiagnoses::Create, type: :operation do
           label: Ai::Diagnosis::HANDLER_TIMEOUT,
           suggested_action: 'Raise the receiver timeout and retry the delivery.',
           source: Ai::Diagnosis::SOURCE_AI,
-          model: 'gemini-test-model'
+          model: 'gemini-test-model',
+          analyzed_attempt_count: 1
         )
       end
 
@@ -54,15 +54,27 @@ describe EndpointDiagnoses::Create, type: :operation do
       end
     end
 
-    context 'when only some fetched attempts fit the provider budget' do
-      it 'records the contexts actually sent to the provider' do
-        attempt(response_status: 500, created_at: 2.minutes.ago)
-        attempt(response_status: 503, created_at: 1.minute.ago)
+    context 'when the provider trims the selected attempts before calling Gemini' do
+      let(:ai_result) do
+        Ai::Diagnosis::Result.new(
+          label: Ai::Diagnosis::PAYLOAD_REJECTED,
+          suggested_action: 'Validate the payload and retry.',
+          source: Ai::Diagnosis::SOURCE_AI,
+          model: 'gemini-test-model',
+          analyzed_attempt_count: 3
+        )
+      end
+
+      it 'records the attempts actually included in the provider context' do
+        10.times { attempt(response_status: 400) }
 
         diagnosis = diagnose
 
+        expect(diagnosis).to have_attributes(
+          source: EndpointDiagnosis::SOURCE_AI,
+          analyzed_attempt_count: 3
+        )
         expect(diagnoser).to have_received(:call).with(array_including(instance_of(DeliveryAttempt)))
-        expect(diagnosis.analyzed_attempt_count).to eq(analyzed_attempt_count)
       end
     end
 
@@ -77,6 +89,32 @@ describe EndpointDiagnoses::Create, type: :operation do
           source: EndpointDiagnosis::SOURCE_FALLBACK,
           model: nil,
           analyzed_attempt_count: 1
+        )
+      end
+
+      it 'classifies and counts all payload rejections in fallback mode' do
+        10.times { attempt(response_status: 400) }
+
+        diagnosis = diagnose
+
+        expect(diagnosis).to have_attributes(
+          label: Ai::Diagnosis::PAYLOAD_REJECTED,
+          source: EndpointDiagnosis::SOURCE_FALLBACK,
+          model: nil,
+          analyzed_attempt_count: 10
+        )
+      end
+
+      it 'uses the dominant fallback label across mixed failures' do
+        8.times { attempt(response_status: 400) }
+        2.times { attempt(response_status: 500) }
+
+        diagnosis = diagnose
+
+        expect(diagnosis).to have_attributes(
+          label: Ai::Diagnosis::PAYLOAD_REJECTED,
+          source: EndpointDiagnosis::SOURCE_FALLBACK,
+          analyzed_attempt_count: 10
         )
       end
     end
@@ -124,7 +162,8 @@ describe EndpointDiagnoses::Create, type: :operation do
             label: Ai::Diagnosis::UNKNOWN,
             suggested_action: 'Check the receiver 5xx logs and recover the endpoint.',
             source: Ai::Diagnosis::SOURCE_AI,
-            model: 'gemini-test-model'
+            model: 'gemini-test-model',
+            analyzed_attempt_count: 1
           )
         )
 
@@ -139,18 +178,11 @@ describe EndpointDiagnoses::Create, type: :operation do
     end
 
     context 'when the endpoint has no delivery history' do
-      let(:analyzed_attempt_count) { 0 }
-
-      it 'still persists an unknown fallback' do
-        diagnosis = diagnose
-
-        expect(diagnosis).to be_persisted
-        expect(diagnosis).to have_attributes(
-          label: Ai::Diagnosis::UNKNOWN,
-          source: EndpointDiagnosis::SOURCE_FALLBACK,
-          analyzed_attempt_count: 0
-        )
-        expect(diagnosis.suggested_action).to be_present
+      it 'returns a 422 error and persists nothing' do
+        expect { diagnose }
+          .to raise_error(ApiError::UnprocessableEntityError, described_class::NO_ATTEMPTS_MESSAGE)
+        expect(EndpointDiagnosis.count).to eq(0)
+        expect(diagnoser).not_to have_received(:call)
       end
     end
 
@@ -174,26 +206,17 @@ describe EndpointDiagnoses::Create, type: :operation do
     end
 
     context 'when the endpoint only has successful deliveries' do
-      let(:analyzed_attempt_count) { 0 }
-
-      it 'sends no evidence to the provider and keeps the unknown fallback' do
+      it 'returns a 422 error and persists nothing' do
         [200, 201, 202, 204].each { |status| attempt(response_status: status) }
 
-        diagnosis = diagnose
-
-        expect(diagnoser).to have_received(:call) { |analyzed| expect(analyzed).to be_empty }
-        expect(diagnosis).to have_attributes(
-          label: Ai::Diagnosis::UNKNOWN,
-          source: EndpointDiagnosis::SOURCE_FALLBACK,
-          model: nil,
-          analyzed_attempt_count: 0
-        )
+        expect { diagnose }
+          .to raise_error(ApiError::UnprocessableEntityError, described_class::NO_ATTEMPTS_MESSAGE)
+        expect(EndpointDiagnosis.count).to eq(0)
+        expect(diagnoser).not_to have_received(:call)
       end
     end
 
     context 'when successful and failed attempts are mixed' do
-      let(:analyzed_attempt_count) { 3 }
-
       it 'sends only the failed attempts, newest first' do
         attempt(response_status: 200, created_at: 5.minutes.ago)
         rejected = attempt(response_status: 400, created_at: 3.minutes.ago)
@@ -253,7 +276,6 @@ describe EndpointDiagnoses::Create, type: :operation do
     context 'when the endpoint attempts come from replayed messages' do
       let(:message_a) { create(:message, project: project, endpoint: endpoint, status: :failed) }
       let(:message_b) { create(:message, project: project, endpoint: endpoint, status: :failed) }
-      let(:analyzed_attempt_count) { 4 }
 
       def replayed_attempts
         {
@@ -279,8 +301,6 @@ describe EndpointDiagnoses::Create, type: :operation do
       end
 
       context 'when the configured limit is smaller than the attempt history' do
-        let(:analyzed_attempt_count) { 2 }
-
         it 'keeps only the newest attempts and drops the older originals' do
           attempts = replayed_attempts
           allow(Ai::AttemptContext).to receive(:attempt_limit).and_return(2)
@@ -297,8 +317,6 @@ describe EndpointDiagnoses::Create, type: :operation do
     end
 
     context 'when the newest attempt timed out without any response' do
-      let(:analyzed_attempt_count) { 2 }
-
       it 'selects it and falls back to handler_timeout' do
         attempt(response_status: 500, created_at: 5.minutes.ago)
         timeout = attempt(response_status: nil, error_type: Net::ReadTimeout.name,
@@ -348,18 +366,13 @@ describe EndpointDiagnoses::Create, type: :operation do
     end
 
     context 'when the only attempt is still in flight' do
-      let(:analyzed_attempt_count) { 0 }
-
-      it 'ignores the endpoint attempt' do
+      it 'returns a 422 error and persists nothing' do
         create(:delivery_attempt, message: message)
 
-        diagnosis = diagnose
-
-        expect(diagnosis).to have_attributes(
-          label: Ai::Diagnosis::UNKNOWN,
-          source: EndpointDiagnosis::SOURCE_FALLBACK,
-          analyzed_attempt_count: 0
-        )
+        expect { diagnose }
+          .to raise_error(ApiError::UnprocessableEntityError, described_class::NO_ATTEMPTS_MESSAGE)
+        expect(EndpointDiagnosis.count).to eq(0)
+        expect(diagnoser).not_to have_received(:call)
       end
     end
 

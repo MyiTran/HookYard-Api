@@ -132,10 +132,16 @@ describe DeliveryAttempt, type: :model do
       expect(described_class.failed_for_diagnosis).to contain_exactly(timeout, tls, dns, reset)
     end
 
-    it 'includes a failure recorded without an error class' do
-      recorded = attempt(error_message: 'connection closed before the response was read')
+    it 'excludes an attempt recorded with only an error message' do
+      attempt(error_message: 'connection closed before the response was read')
 
-      expect(described_class.failed_for_diagnosis).to contain_exactly(recorded)
+      expect(described_class.failed_for_diagnosis).to be_empty
+    end
+
+    it 'excludes an attempt with an empty transport error and no response' do
+      attempt(error_type: '', error_message: 'no usable error class')
+
+      expect(described_class.failed_for_diagnosis).to be_empty
     end
 
     it 'excludes an attempt that is still in flight' do

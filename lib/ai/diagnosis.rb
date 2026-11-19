@@ -29,7 +29,7 @@ module Ai
 
     ACTION_MAX_LENGTH = 240
 
-    Result = Struct.new(:label, :suggested_action, :source, :model, keyword_init: true) do
+    Result = Struct.new(:label, :suggested_action, :source, :model, :analyzed_attempt_count, keyword_init: true) do
       def ai?
         source == SOURCE_AI
       end
