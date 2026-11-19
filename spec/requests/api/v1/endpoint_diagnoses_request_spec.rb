@@ -6,8 +6,14 @@ describe 'Endpoint failure diagnoses', type: :request do
   let(:project) { create(:project, :with_owner, owner: owner) }
   let(:endpoint) { create(:endpoint, project: project) }
   let(:diagnoser) { instance_double(Ai::GeminiFailureDiagnoser, call: nil) }
+  let(:guard) { instance_double(EndpointDiagnosisGuard) }
 
-  before { allow(Ai::GeminiFailureDiagnoser).to receive(:new).and_return(diagnoser) }
+  before do
+    allow(Ai::GeminiFailureDiagnoser).to receive(:new).and_return(diagnoser)
+    allow(EndpointDiagnosisGuard).to receive(:new).and_return(guard)
+    allow(guard).to receive(:with_lock).and_yield
+    allow(guard).to receive(:mark_success!)
+  end
 
   def diagnose(user: owner, target_project: project, target_endpoint: endpoint)
     post "/api/v1/projects/#{target_project.id}/endpoints/#{target_endpoint.id}/diagnoses",
@@ -98,6 +104,78 @@ describe 'Endpoint failure diagnoses', type: :request do
         expect(delivery.reload.attributes).to eq(before_state[1])
         expect(endpoint.reload.attributes).to eq(before_state[2])
         expect(ActiveJob::Base.queue_adapter.enqueued_jobs).to be_empty
+      end
+
+      it 'returns 429 with retry-after when the diagnosis guard rejects the request' do
+        create(:delivery_attempt, message: create(:message, project: project, endpoint: endpoint, status: :failed),
+                                  response_status: 500)
+        allow(guard).to receive(:with_lock).and_raise(
+          ApiError::DiagnosisCooldownError.new(retry_after: 30)
+        )
+
+        diagnose
+
+        expect(response).to have_http_status(:too_many_requests)
+        expect(json_response).to include(
+          'code' => 'diagnosis_rate_limited',
+          'status' => 429,
+          'retry_after' => 30
+        )
+        expect(response.headers['Retry-After']).to eq('30')
+        expect(EndpointDiagnosis.count).to eq(0)
+        expect(diagnoser).not_to have_received(:call)
+      end
+
+      it 'returns the persisted diagnosis when the cooldown mark fails' do
+        create(:delivery_attempt, message: create(:message, project: project, endpoint: endpoint, status: :failed),
+                                  response_status: 500)
+        redis = instance_double(Redis)
+        allow(redis).to receive_messages(ttl: -2, eval: 1)
+        allow(redis).to receive(:set).and_return('OK')
+        allow(redis).to receive(:set).with(
+          "endpoint_diagnosis:cooldown:#{project.id}:#{endpoint.id}", '1', ex: 30
+        ).and_raise(Redis::BaseError, 'connection lost')
+        allow(EndpointDiagnosisGuard).to receive(:new).and_return(
+          EndpointDiagnosisGuard.new(redis: redis)
+        )
+
+        diagnose
+
+        expect(response).to have_http_status(:created)
+        expect(EndpointDiagnosis.count).to eq(1)
+        expect(json_response['analyzed_attempt_count']).to eq(1)
+      end
+
+      it 'uses the database as a cooldown backstop when Redis cooldown marking fails' do
+        create(:delivery_attempt, message: create(:message, project: project, endpoint: endpoint, status: :failed),
+                                  response_status: 500)
+        redis = FakeRedis.new
+        redis.fail_cooldown = true
+        allow(EndpointDiagnosisGuard).to receive(:new).and_return(
+          EndpointDiagnosisGuard.new(redis: redis)
+        )
+
+        travel_to(Time.zone.local(2026, 1, 1, 12, 0, 0))
+
+        diagnose
+        expect(response).to have_http_status(:created)
+        expect(EndpointDiagnosis.count).to eq(1)
+        expect(diagnoser).to have_received(:call).once
+
+        travel(1.second)
+        diagnose
+        expect(response).to have_http_status(:too_many_requests)
+        expect(json_response['retry_after']).to be_a(Integer)
+        expect(json_response['retry_after']).to be_positive
+        expect(response.headers['Retry-After']).to eq(json_response['retry_after'].to_s)
+        expect(EndpointDiagnosis.count).to eq(1)
+        expect(diagnoser).to have_received(:call).once
+
+        travel(30.seconds)
+        diagnose
+        expect(response).to have_http_status(:created)
+        expect(EndpointDiagnosis.count).to eq(2)
+        expect(diagnoser).to have_received(:call).twice
       end
     end
 

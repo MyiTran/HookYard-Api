@@ -158,6 +158,9 @@ describe Ai::GeminiFailureDiagnoser do
       expect(described_class::INSTRUCTIONS).to include('500-599 => unknown')
       expect(described_class::INSTRUCTIONS).to include('400, 409, 415 or 422 => payload_rejected')
       expect(described_class::INSTRUCTIONS).to include('408, 504 or a transport timeout => handler_timeout')
+      expect(described_class::INSTRUCTIONS).to include('choose the label that occurs most often')
+      expect(described_class::INSTRUCTIONS).to include('choose the label of the newest attempt')
+      expect(described_class::INSTRUCTIONS).to include('first attempt in the evidence array')
       expect(described_class::INSTRUCTIONS).to include(
         'When the evidence shows a 5xx receiver response, use "unknown" and suggest'
       )

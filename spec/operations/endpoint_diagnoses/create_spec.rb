@@ -9,7 +9,8 @@ describe EndpointDiagnoses::Create, type: :operation do
   let(:diagnoser) do
     instance_double(Ai::GeminiFailureDiagnoser, call: ai_result)
   end
-  let(:operation) { described_class.new(diagnoser: diagnoser) }
+  let(:guard) { instance_double(EndpointDiagnosisGuard) }
+  let(:operation) { described_class.new(diagnoser: diagnoser, guard: guard) }
 
   def attempt(**attributes)
     create(:delivery_attempt, message: message, **attributes)
@@ -24,6 +25,11 @@ describe EndpointDiagnoses::Create, type: :operation do
   end
 
   describe '.call' do
+    before do
+      allow(guard).to receive(:with_lock).and_yield
+      allow(guard).to receive(:mark_success!)
+    end
+
     context 'when the provider returns a validated answer' do
       let(:ai_result) do
         Ai::Diagnosis::Result.new(
@@ -400,11 +406,13 @@ describe EndpointDiagnoses::Create, type: :operation do
       first = diagnose
       snapshot = first.reload.attributes
 
-      second = diagnose
+      travel(31.seconds) do
+        second = diagnose
 
-      expect(EndpointDiagnosis.count).to eq(2)
-      expect(second.id).not_to eq(first.id)
-      expect(first.reload.attributes).to eq(snapshot)
+        expect(EndpointDiagnosis.count).to eq(2)
+        expect(second.id).not_to eq(first.id)
+        expect(first.reload.attributes).to eq(snapshot)
+      end
     end
 
     it 'keeps the earlier diagnosis when a later replay succeeds' do
@@ -418,12 +426,15 @@ describe EndpointDiagnoses::Create, type: :operation do
         analyzed << attempts
         nil
       end
-      latest = diagnose
 
-      expect(analyzed.last).to eq([failed])
-      expect(previous.reload.attributes).to eq(snapshot)
-      expect(EndpointDiagnosis.count).to eq(2)
-      expect(latest.id).not_to eq(previous.id)
+      travel(31.seconds) do
+        latest = diagnose
+
+        expect(analyzed.last).to eq([failed])
+        expect(previous.reload.attributes).to eq(snapshot)
+        expect(EndpointDiagnosis.count).to eq(2)
+        expect(latest.id).not_to eq(previous.id)
+      end
     end
 
     it 'does not touch delivery state, circuit state, queue jobs or usage' do
@@ -451,5 +462,85 @@ describe EndpointDiagnoses::Create, type: :operation do
       expect(UserUsagePeriod.order(:id).map(&:attributes)).to eq(usage_before)
       expect(ActiveJob::Base.queue_adapter.enqueued_jobs.size).to eq(enqueued)
     end
+
+    context 'when the diagnosis guard rejects the request' do
+      before do
+        create(:delivery_attempt, message: message, response_status: 500)
+        allow(guard).to receive(:with_lock).and_raise(
+          ApiError::DiagnosisCooldownError.new(retry_after: 12)
+        )
+      end
+
+      it 'raises the public 429 error without calling Gemini or persisting a diagnosis' do
+        expect { diagnose }.to raise_error(ApiError::DiagnosisCooldownError) do |error|
+          expect(error.status).to eq(429)
+          expect(error.headers['Retry-After']).to eq('12')
+        end
+
+        expect(diagnoser).not_to have_received(:call)
+        expect(EndpointDiagnosis.count).to eq(0)
+      end
+    end
+
+    context 'when a diagnosis persists' do
+      it 'starts the cooldown after a Gemini success' do
+        create(:delivery_attempt, message: message, response_status: 500)
+        allow(diagnoser).to receive(:call).and_return(
+          Ai::Diagnosis::Result.new(
+            label: Ai::Diagnosis::UNKNOWN,
+            suggested_action: 'Check the receiver 5xx logs.',
+            source: Ai::Diagnosis::SOURCE_AI,
+            model: 'gemini-test-model',
+            analyzed_attempt_count: 1
+          )
+        )
+
+        diagnose
+
+        expect(guard).to have_received(:mark_success!).with(endpoint: endpoint)
+      end
+
+      it 'starts the cooldown after a safe fallback persistence' do
+        create(:delivery_attempt, message: message, response_status: 500)
+
+        diagnose
+
+        expect(guard).to have_received(:mark_success!).with(endpoint: endpoint)
+      end
+    end
+  end
+
+  describe 'cooldown guard integration' do
+    let(:redis) { FakeRedis.new }
+    let(:guard) { EndpointDiagnosisGuard.new(redis: redis) }
+    let(:operation) { described_class.new(diagnoser: diagnoser, guard: guard) }
+
+    it 'rejects another actor on the same endpoint during the endpoint-wide cooldown' do
+      create(:delivery_attempt, message: message, response_status: 500)
+      first = diagnose
+
+      expect(first).to be_persisted
+      expect(redis.cooldowns).to have_key(cooldown_key)
+
+      other_actor = create(:user)
+      create(:project_membership, project: project, user: other_actor, role: :maintainer)
+
+      expect { operation.call(endpoint: endpoint, actor: other_actor) }
+        .to raise_error(ApiError::DiagnosisCooldownError)
+    end
+
+    it 'returns the persisted diagnosis when the cooldown mark fails' do
+      create(:delivery_attempt, message: message, response_status: 500)
+      redis.fail_cooldown = true
+
+      diagnosis = diagnose
+
+      expect(diagnosis).to be_persisted
+      expect(EndpointDiagnosis.count).to eq(1)
+    end
+  end
+
+  def cooldown_key
+    "endpoint_diagnosis:cooldown:#{project.id}:#{endpoint.id}"
   end
 end
