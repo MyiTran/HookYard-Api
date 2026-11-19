@@ -31,10 +31,11 @@ describe 'Endpoint failure diagnoses', type: :request do
         diagnose
 
         expect(response).to have_http_status(:created)
-        expect(json_response.keys).to contain_exactly('label', 'suggested_action', 'source', 'created_at')
+        expect(json_response.keys).to contain_exactly('label', 'suggested_action', 'source', 'analyzed_attempt_count', 'created_at')
         expect(json_response).to include(
           'label' => Ai::Diagnosis::UNKNOWN,
-          'source' => EndpointDiagnosis::SOURCE_FALLBACK
+          'source' => EndpointDiagnosis::SOURCE_FALLBACK,
+          'analyzed_attempt_count' => 1
         )
         expect(json_response['suggested_action']).to be_present
 
@@ -62,7 +63,8 @@ describe 'Endpoint failure diagnoses', type: :request do
 
         expect(response).to have_http_status(:created)
         expect(json_response).to include('label' => Ai::Diagnosis::RATE_LIMITED,
-                                         'source' => EndpointDiagnosis::SOURCE_AI)
+                                         'source' => EndpointDiagnosis::SOURCE_AI,
+                                         'analyzed_attempt_count' => 1)
       end
 
       it 'never leaks provider details when the provider answer is unusable' do
@@ -142,11 +144,12 @@ describe 'Endpoint failure diagnoses', type: :request do
         latest
 
         expect(response).to have_http_status(:ok)
-        expect(json_response.keys).to contain_exactly('label', 'suggested_action', 'source', 'created_at')
+        expect(json_response.keys).to contain_exactly('label', 'suggested_action', 'source', 'analyzed_attempt_count', 'created_at')
         expect(json_response).to include(
           'label' => diagnosis.label,
           'suggested_action' => diagnosis.suggested_action,
-          'source' => diagnosis.source
+          'source' => diagnosis.source,
+          'analyzed_attempt_count' => diagnosis.analyzed_attempt_count
         )
         expect(Time.zone.parse(json_response['created_at'])).to be_within(1.second).of(diagnosis.created_at)
       end

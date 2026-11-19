@@ -16,11 +16,11 @@ module Ai
     STATUS_GUIDANCE = [
       ['500-599', Diagnosis::UNKNOWN],
       ['429', Diagnosis::RATE_LIMITED],
-      ['408 or a transport timeout', Diagnosis::HANDLER_TIMEOUT],
+      ['408, 504 or a transport timeout', Diagnosis::HANDLER_TIMEOUT],
       ['401 or 403',
        "#{Diagnosis::AUTH_EXPIRED} for rejected credentials, #{Diagnosis::SIGNATURE_MISMATCH} for a rejected signature"],
       ['404 or 410', Diagnosis::ENDPOINT_GONE],
-      ['400 or 422', "#{Diagnosis::PAYLOAD_REJECTED} for a rejected payload"]
+      ['400, 409, 415 or 422', "#{Diagnosis::PAYLOAD_REJECTED} for a rejected payload"]
     ].freeze
 
     INSTRUCTIONS = <<~PROMPT.squish

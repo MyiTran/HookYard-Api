@@ -150,12 +150,14 @@ describe Ai::GeminiFailureDiagnoser do
       expect(rules).to include(
         '500-599' => Ai::Diagnosis::UNKNOWN,
         '429' => Ai::Diagnosis::RATE_LIMITED,
-        '408 or a transport timeout' => Ai::Diagnosis::HANDLER_TIMEOUT,
+        '408, 504 or a transport timeout' => Ai::Diagnosis::HANDLER_TIMEOUT,
         '404 or 410' => Ai::Diagnosis::ENDPOINT_GONE
       )
       expect(rules['401 or 403']).to include(Ai::Diagnosis::AUTH_EXPIRED, Ai::Diagnosis::SIGNATURE_MISMATCH)
-      expect(rules['400 or 422']).to include(Ai::Diagnosis::PAYLOAD_REJECTED)
+      expect(rules['400, 409, 415 or 422']).to include(Ai::Diagnosis::PAYLOAD_REJECTED)
       expect(described_class::INSTRUCTIONS).to include('500-599 => unknown')
+      expect(described_class::INSTRUCTIONS).to include('400, 409, 415 or 422 => payload_rejected')
+      expect(described_class::INSTRUCTIONS).to include('408, 504 or a transport timeout => handler_timeout')
       expect(described_class::INSTRUCTIONS).to include(
         'When the evidence shows a 5xx receiver response, use "unknown" and suggest'
       )

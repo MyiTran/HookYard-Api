@@ -144,6 +144,12 @@ describe DeliveryAttempt, type: :model do
       expect(described_class.failed_for_diagnosis).to be_empty
     end
 
+    it 'excludes an attempt with a whitespace-only transport error and no response' do
+      attempt(error_type: '   ', error_message: 'no usable error class')
+
+      expect(described_class.failed_for_diagnosis).to be_empty
+    end
+
     it 'excludes an attempt that is still in flight' do
       attempt
 

@@ -65,7 +65,7 @@ class DeliveryAttempt < ApplicationRecord
   scope :failed_for_diagnosis, lambda {
     where(
       '(response_status IS NOT NULL AND response_status NOT BETWEEN :from AND :to) OR ' \
-      '(response_status IS NULL AND error_type IS NOT NULL AND error_type <> :empty)',
+      '(response_status IS NULL AND NULLIF(BTRIM(error_type), :empty) IS NOT NULL)',
       from: RESPONSE_SUCCESS_STATUSES.first,
       to: RESPONSE_SUCCESS_STATUSES.last,
       empty: ''
