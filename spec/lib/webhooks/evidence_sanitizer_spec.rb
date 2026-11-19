@@ -156,8 +156,18 @@ describe Webhooks::EvidenceSanitizer do
       )
     end
 
-    it 'keeps a body that is not json unchanged' do
-      expect(described_class.sanitize_body('internal server error')).to eq('internal server error')
+    it 'redacts a body that is not structured json' do
+      expect(described_class.sanitize_body('internal server error')).to be_nil
+    end
+
+    it 'redacts a body that is a json scalar' do
+      expect(described_class.sanitize_body('"bare token"')).to be_nil
+    end
+
+    it 'redacts a binary body without raising' do
+      binary = "token=secret\xFF\xFE".b
+
+      expect(described_class.sanitize_body(binary)).to be_nil
     end
 
     it 'keeps a missing body missing' do

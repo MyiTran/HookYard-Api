@@ -59,17 +59,17 @@ class DeliveryAttempt < ApplicationRecord
   belongs_to :message
   belongs_to :replay_item, optional: true
 
-  scope :completed, -> { where('response_status IS NOT NULL OR error_type IS NOT NULL') }
-  # Failure diagnosis must only see attempts the pipeline considers failed: a non-2xx
-  # response or a terminal transport error (timeout, DNS, TLS, connection reset). A 2xx
-  # delivery is a success and an attempt without terminal evidence is still in flight,
-  # so neither is failure evidence for the prompt.
+  # Failure diagnosis must only see attempts with usable failure evidence: an HTTP
+  # response outside the success range, or a transport error type. A 2xx delivery is a
+  # success and an attempt without terminal evidence is still in flight, so neither is
+  # failure evidence for the prompt.
   scope :failed_for_diagnosis, lambda {
     where(
-      'coalesce(response_status not between :from and :to, true) and ' \
-      '(response_status is not null or error_type is not null or error_message is not null)',
+      '(response_status IS NOT NULL AND response_status NOT BETWEEN :from AND :to) OR ' \
+      '(response_status IS NULL AND NULLIF(BTRIM(error_type), :empty) IS NOT NULL)',
       from: RESPONSE_SUCCESS_STATUSES.first,
-      to: RESPONSE_SUCCESS_STATUSES.last
+      to: RESPONSE_SUCCESS_STATUSES.last,
+      empty: ''
     )
   }
   scope :newest_first, -> { reorder(created_at: :desc, attempt_number: :desc) }
@@ -87,11 +87,11 @@ class DeliveryAttempt < ApplicationRecord
   end
 
   def transport_failed?
-    error_type.present?
+    error_type.to_s.strip.present?
   end
 
   def completed?
-    response_status.present? || error_type.present?
+    response_status.present? || transport_failed?
   end
 
   def replay?

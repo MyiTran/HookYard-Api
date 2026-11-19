@@ -3,14 +3,14 @@ module Webhooks
   # rules. Every delivery attempt uses these values so retry behavior stays
   # predictable across workers and restarts.
   class DeliveryPolicy
-    DEFAULT_HTTP_TIMEOUT_SECONDS = 15
+    HTTP_TIMEOUT_SECONDS = 15
     MIN_HTTP_TIMEOUT_SECONDS = 1
     MAX_HTTP_TIMEOUT_SECONDS = 30
     MAX_ATTEMPTS = 8
 
     # Delay inserted after the given attempt: attempt 1 is immediate, so the
     # first retry waits 5 seconds and the last retry waits 10 hours.
-    DEFAULT_RETRY_DELAYS = [
+    RETRY_DELAYS = [
       5.seconds,
       5.minutes,
       30.minutes,
@@ -23,7 +23,7 @@ module Webhooks
     JITTER_RATIO = 0.2
     MAX_ACTIVE_DELIVERIES_PER_ENDPOINT = 3
     CAPACITY_RETRY_DELAY = 15.seconds
-    DELIVERY_LEASE_SECONDS = DEFAULT_HTTP_TIMEOUT_SECONDS * 4
+    DELIVERY_LEASE_SECONDS = HTTP_TIMEOUT_SECONDS * 4
 
     RETRYABLE_HTTP_STATUSES = [408, 429].freeze
     RETRYABLE_ERROR_TYPES = %w[
@@ -63,14 +63,14 @@ module Webhooks
 
       def retry_delays_for(project)
         configured = project&.pro? ? project.delivery_retry_delays_seconds : nil
-        return DEFAULT_RETRY_DELAYS if configured.blank?
+        return RETRY_DELAYS if configured.blank?
 
         configured.map { |seconds| seconds.seconds }
       end
 
       def timeout_seconds_for(project)
         configured = project&.pro? ? project.delivery_timeout_seconds : nil
-        configured || DEFAULT_HTTP_TIMEOUT_SECONDS
+        configured || HTTP_TIMEOUT_SECONDS
       end
 
       def retryable?(result)

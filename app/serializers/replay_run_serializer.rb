@@ -1,7 +1,8 @@
 class ReplayRunSerializer < ApplicationSerializer
   identifier :id
 
-  fields :mode, :project_id, :requested_count, :filters, :materialized_at, :created_at, :updated_at
+  fields :mode, :project_id, :requested_count, :filters, :materialized_at, :created_at, :updated_at,
+         :as_of, :failed_at, :failure_reason
 
   field :status do |run|
     run.progress[:status]

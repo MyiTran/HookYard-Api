@@ -8,23 +8,25 @@ class ProjectSerializer < ApplicationSerializer
   end
 
   field :endpoint_limit do |project|
-    Plans::Entitlements.endpoint_limit(project.billing_owner)
+    account = project.effective_billing_owner
+    Plans::Entitlements.endpoint_limit(account) if account
   end
 
   field :monthly_delivery_limit do |project|
-    Plans::Entitlements.monthly_delivery_limit(project.billing_owner)
+    account = project.effective_billing_owner
+    Plans::Entitlements.monthly_delivery_limit(account) if account
   end
 
   field :usage do |project, options|
-    account = project.billing_owner
-    limit = Plans::Entitlements.monthly_delivery_limit(account)
+    account = project.effective_billing_owner
+    limit = Plans::Entitlements.monthly_delivery_limit(account) if account
     summary = options[:usage_summary]
-    used = summary ? summary.deliveries_for(project) : account.deliveries_used_in_period
+    used = summary&.deliveries_for(project) || account&.deliveries_used_in_period || 0
 
     {
       endpoint_count: summary ? summary.endpoint_count_for(project) : project.endpoint_count,
       deliveries_this_period: used,
-      deliveries_remaining: [limit - used, 0].max,
+      deliveries_remaining: limit ? [limit - used, 0].max : nil,
       period_starts_at: UserUsagePeriod.period_starts_at.iso8601,
       period_ends_at: UserUsagePeriod.period_ends_at.iso8601
     }

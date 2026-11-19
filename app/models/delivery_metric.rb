@@ -28,12 +28,25 @@ class DeliveryMetric < ApplicationRecord
     updated_at = EXCLUDED.updated_at
   SQL
 
-  BACKFILL_SQL = <<~SQL
-    WITH claimed_attempts AS (
+  DEFAULT_BACKFILL_BATCH_SIZE = 1_000
+
+  BACKFILL_BATCH_SQL = <<~SQL
+    WITH claimed AS (
+      SELECT id
+      FROM delivery_attempts
+      WHERE metrics_recorded_at IS NULL
+        AND (
+          response_status IS NOT NULL
+          OR (error_type IS NOT NULL AND BTRIM(error_type) <> '')
+        )
+      ORDER BY id
+      LIMIT ?
+      FOR UPDATE SKIP LOCKED
+    ), claimed_attempts AS (
       UPDATE delivery_attempts
       SET metrics_recorded_at = NOW()
-      WHERE metrics_recorded_at IS NULL
-        AND (response_status IS NOT NULL OR error_type IS NOT NULL)
+      WHERE id IN (SELECT id FROM claimed)
+        AND metrics_recorded_at IS NULL
       RETURNING message_id, response_status, error_type, created_at
     ), aggregated_attempts AS (
       SELECT endpoints.project_id,
@@ -68,27 +81,38 @@ class DeliveryMetric < ApplicationRecord
       return if attempt.message.nil?
       return unless attempt.completed?
 
-      claimed = DeliveryAttempt.where(id: attempt.id, metrics_recorded_at: nil)
-                               .update_all(metrics_recorded_at: Time.current)
-      return if claimed.zero?
+      transaction(requires_new: true) do
+        claimed = DeliveryAttempt.where(id: attempt.id, metrics_recorded_at: nil)
+                                 .update_all(metrics_recorded_at: Time.current)
+        next if claimed.zero?
 
-      upsert_all(
-        [{
-          project_id: attempt.message.endpoint.project_id,
-          day: attempt.created_at.utc.to_date,
-          attempts_count: 1,
-          successes_count: attempt.succeeded? ? 1 : 0,
-          failures_count: attempt.succeeded? ? 0 : 1,
-          created_at: Time.current,
-          updated_at: Time.current
-        }],
-        unique_by: %i[project_id day],
-        on_duplicate: Arel.sql(UPSERT_COLUMNS)
-      )
+        upsert_all(
+          [{
+            project_id: attempt.message.endpoint.project_id,
+            day: attempt.created_at.utc.to_date,
+            attempts_count: 1,
+            successes_count: attempt.succeeded? ? 1 : 0,
+            failures_count: attempt.succeeded? ? 0 : 1,
+            created_at: Time.current,
+            updated_at: Time.current
+          }],
+          unique_by: %i[project_id day],
+          on_duplicate: Arel.sql(UPSERT_COLUMNS)
+        )
+      end
+    rescue StandardError => e
+      Rails.logger.warn("DeliveryMetric.record_attempt! skipped: #{e.class}: #{e.message}")
+      nil
     end
 
-    def backfill_missing!
-      connection.execute(BACKFILL_SQL)
+    def backfill_missing!(batch_size: DEFAULT_BACKFILL_BATCH_SIZE)
+      DeliveryMetrics::Backfill.call(batch_size: batch_size)
+    end
+
+    def backfill_batch(batch_size)
+      connection.execute(
+        sanitize_sql_array([BACKFILL_BATCH_SQL, batch_size.to_i])
+      ).cmd_tuples
     end
   end
 end

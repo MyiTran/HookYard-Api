@@ -80,12 +80,12 @@ describe 'Admin::SupportAccounts', type: :request do
         expect(ids).not_to include(account.id)
       end
 
-      it 'ignores an invalid plan without exposing SQL errors' do
+      it 'returns no accounts for an invalid plan without exposing SQL errors' do
         get '/api/v1/admin/support_accounts',
             params: { plan: "'; DROP TABLE users;--" }, headers: auth_headers(admin)
 
         expect(response).to have_http_status(:ok)
-        expect(json_response['data']).not_to be_empty
+        expect(json_response['data']).to be_empty
       end
 
       it 'combines q, plan and pagination' do

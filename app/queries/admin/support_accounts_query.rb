@@ -32,27 +32,38 @@ module Admin
 
     def by_role(scope, role)
       normalized = role.to_s
-      return scope unless ROLES.include?(normalized)
+      return scope if normalized.blank?
+      return scope.none unless ROLES.include?(normalized)
       return scope.where.not(id: User.joins(:roles).select(:id)) if normalized == 'none'
 
       scope.where(id: User.with_role(normalized.to_sym).select(:id))
     end
 
     def by_active(scope, active)
-      confirmed = ActiveModel::Type::Boolean.new.cast(active)
-      return scope if confirmed.nil?
+      return scope if active.nil?
+
+      confirmed = boolean_value(active)
+      return scope.none if confirmed.nil?
 
       confirmed ? scope.where.not(confirmed_at: nil) : scope.where(confirmed_at: nil)
     end
 
     def by_plan(scope, plan)
-      return scope unless User::PLANS.include?(plan.to_s)
+      return scope if plan.blank?
+      return scope.none unless User::PLANS.include?(plan.to_s)
 
       scope.where(plan: plan.to_s).where.not(id: User.with_role(:admin).select(:id))
     end
 
     def apply_order(scope, value)
       scope.order(ORDERS.fetch(value.to_s, ORDERS.fetch(DEFAULT_ORDER)))
+    end
+
+    def boolean_value(value)
+      case value
+      when true, 'true', '1', 1 then true
+      when false, 'false', '0', 0 then false
+      end
     end
   end
 end

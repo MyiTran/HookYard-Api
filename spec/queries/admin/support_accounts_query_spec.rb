@@ -77,8 +77,8 @@ describe Admin::SupportAccountsQuery do
       expect(run(role: 'none').map(&:id)).to contain_exactly(pro_customer.id, unconfirmed_customer.id)
     end
 
-    it 'ignores an unsupported role' do
-      expect(run(role: 'owner').count).to eq(4)
+    it 'returns no accounts for an unsupported role' do
+      expect(run(role: 'owner')).to be_empty
     end
   end
 
@@ -96,13 +96,13 @@ describe Admin::SupportAccountsQuery do
       expect(run(plan: 'pro').map(&:id)).not_to include(admin_account.id)
     end
 
-    it 'ignores an unknown plan' do
-      expect(run(plan: 'enterprise').count).to eq(4)
+    it 'returns no accounts for an unknown plan' do
+      expect(run(plan: 'enterprise')).to be_empty
     end
 
-    it 'treats SQL fragments as an unknown plan' do
+    it 'treats SQL fragments as an empty filter result' do
       expect { run(plan: "'; DROP TABLE users;--") }.not_to raise_error
-      expect(run(plan: "'; DROP TABLE users;--").count).to eq(4)
+      expect(run(plan: "'; DROP TABLE users;--")).to be_empty
     end
   end
 
@@ -113,6 +113,10 @@ describe Admin::SupportAccountsQuery do
 
     it 'filters unconfirmed accounts' do
       expect(run(active: false).map(&:id)).to eq([unconfirmed_customer.id])
+    end
+
+    it 'returns no accounts for an invalid boolean' do
+      expect(run(active: 'sometimes')).to be_empty
     end
   end
 end

@@ -98,9 +98,9 @@ describe ProjectsQuery do
       expect(run(plan: User::PRO_PLAN)).to contain_exactly(owned_project)
     end
 
-    it 'ignores an invalid account id and plan' do
-      expect(run(account_id: 'not-a-uuid')).to contain_exactly(owned_project, joined_project, free_project)
-      expect(run(plan: 'enterprise')).to contain_exactly(owned_project, joined_project, free_project)
+    it 'returns no projects for an invalid account id or plan' do
+      expect(run(account_id: 'not-a-uuid')).to be_empty
+      expect(run(plan: 'enterprise')).to be_empty
     end
   end
 

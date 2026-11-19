@@ -25,12 +25,12 @@ describe Admin::DeliveriesQuery do
   end
 
   describe 'time window' do
-    context 'with the default window' do
-      it 'keeps the last seven days and drops older deliveries' do
+    context 'without date filters' do
+      it 'keeps deliveries across the full relation' do
         recent = create_message(created_at: 6.days.ago)
-        create_message(created_at: 8.days.ago)
+        older = create_message(created_at: 8.days.ago)
 
-        expect(run.ids).to contain_exactly(recent.id)
+        expect(run.ids).to contain_exactly(recent.id, older.id)
       end
     end
 
@@ -50,6 +50,15 @@ describe Admin::DeliveriesQuery do
 
         expect(run(from: 12.days.ago.iso8601, to: 10.days.ago.iso8601).ids).to contain_exactly(inside.id)
       end
+    end
+  end
+
+  describe 'preloading' do
+    it 'does not preload replay state for the admin delivery serializer' do
+      preloads = run.preload_values
+
+      expect(preloads).not_to include(:active_replay_item, :latest_replay_item)
+      expect(preloads).to include(:event, :endpoint, endpoint: :project)
     end
   end
 
@@ -80,10 +89,10 @@ describe Admin::DeliveriesQuery do
     end
 
     context 'with an unknown category' do
-      it 'ignores the filter' do
+      it 'returns no deliveries' do
         create_failed_message(response_status: 500)
 
-        expect(run(failure_category: 'made_up').to_a.size).to eq(1)
+        expect(run(failure_category: 'made_up')).to be_empty
       end
     end
   end
@@ -120,10 +129,19 @@ describe Admin::DeliveriesQuery do
       expect(described_class.call(Message.all, account_id: owner.id).ids).to contain_exactly(owned_message.id)
     end
 
-    it 'ignores an invalid account id' do
+    it 'returns no deliveries for an invalid account id' do
       create_message
 
-      expect(described_class.call(Message.all, account_id: 'not-a-uuid')).not_to be_empty
+      expect(described_class.call(Message.all, account_id: 'not-a-uuid')).to be_empty
+    end
+
+    it 'returns no deliveries for invalid scoped filters' do
+      create_message
+
+      expect(run(project_id: 'not-a-uuid')).to be_empty
+      expect(run(endpoint_id: 'not-a-uuid')).to be_empty
+      expect(run(status: 'not-a-status')).to be_empty
+      expect(run(from: 'not-a-time')).to be_empty
     end
   end
 end

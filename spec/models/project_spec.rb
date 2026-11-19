@@ -97,6 +97,59 @@ describe Project, type: :model do
     end
   end
 
+  describe '#effective_billing_owner' do
+    context 'when the persisted billing owner is present' do
+      it 'prefers the persisted owner without querying owner memberships' do
+        project = create(:project, :with_owner)
+        project.reload
+
+        queries = sql_queries { project.effective_billing_owner }
+
+        expect(project.effective_billing_owner).to eq(project.billing_owner)
+        expect(queries.grep(/project_memberships/)).to be_empty
+      end
+    end
+
+    context 'when the persisted billing owner is null and an owner membership exists' do
+      it 'derives the billing owner from the owner membership' do
+        project = create(:project, :with_owner)
+        project.update_columns(billing_owner_id: nil)
+
+        expect(project.effective_billing_owner).to eq(project.owner)
+        expect(project.effective_billing_owner_id).to eq(project.owner.id)
+        expect(project.plan).to eq(project.owner.plan)
+      end
+    end
+
+    context 'when the persisted billing owner is null and there is no owner membership' do
+      it 'returns nil instead of choosing a maintainer' do
+        project = create(:project)
+        project.update_columns(billing_owner_id: nil)
+        create(:project_membership, project: project, user: create(:user), role: :maintainer)
+
+        expect(project.effective_billing_owner).to be_nil
+        expect(project.effective_billing_owner_id).to be_nil
+      end
+    end
+
+    context 'when the persisted billing owner is null and there are several owner memberships' do
+      before do
+        ActiveRecord::Base.connection.execute('DROP INDEX index_project_memberships_on_project_id_owner')
+      end
+
+      it 'does not choose one arbitrarily' do
+        project = create(:project, :with_owner)
+        project.update_columns(billing_owner_id: nil)
+        create(:project_membership, project: project, user: create(:user), role: :owner)
+        allow(Rails.logger).to receive(:error)
+
+        expect(project.effective_billing_owner).to be_nil
+        expect(project.effective_billing_owner_id).to be_nil
+        expect(Rails.logger).to have_received(:error).with(/refusing to choose a billing owner/).at_least(:once)
+      end
+    end
+  end
+
   describe '#endpoint_count' do
     context 'when the project has active endpoints' do
       before { create_list(:endpoint, 2, project: project) }

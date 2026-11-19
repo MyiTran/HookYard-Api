@@ -37,7 +37,19 @@ module DeliveryAttempts
 
     def candidate_scope(plan, cutoff)
       DeliveryAttempt
-        .joins(message: { event: { project: :billing_owner } })
+        .joins(message: { event: :project })
+        .joins(<<~SQL.squish)
+          LEFT JOIN LATERAL (
+            SELECT project_memberships.user_id
+            FROM project_memberships
+            WHERE project_memberships.project_id = projects.id
+              AND project_memberships.role = '#{ProjectMembership.roles[:owner]}'
+            LIMIT 1
+          ) owner_membership ON TRUE
+        SQL
+        .joins(<<~SQL.squish)
+          INNER JOIN users ON users.id = COALESCE(projects.billing_owner_id, owner_membership.user_id)
+        SQL
         .where(users: { plan: plan })
         .where(bodies_purged_at: nil)
         .where('delivery_attempts.created_at < ?', cutoff)

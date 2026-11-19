@@ -89,13 +89,22 @@ describe 'Admin::Deliveries', type: :request do
         expect(json_response['data'].map { |item| item['id'] }).to eq([timeout.id])
       end
 
-      it 'excludes deliveries older than the default window' do
-        recent = create_delivery(created_at: 1.day.ago)
-        create_delivery(created_at: 10.days.ago)
+      it 'returns the complete unfiltered relation before paginating in created order' do
+        older = create_delivery(created_at: 10.days.ago)
+        middle_project = create(:project)
+        middle_endpoint = create(:endpoint, project: middle_project)
+        middle = create(:message, project: middle_project, endpoint: middle_endpoint, created_at: 2.days.ago)
+        newest_project = create(:project)
+        newest_endpoint = create(:endpoint, project: newest_project)
+        newest = create(:message, project: newest_project, endpoint: newest_endpoint, created_at: 1.day.ago)
 
-        get '/api/v1/admin/deliveries', headers: auth_headers(admin)
+        get '/api/v1/admin/deliveries',
+            params: { order: 'created_desc', page: { size: 2 } },
+            headers: auth_headers(admin)
 
-        expect(json_response['data'].map { |item| item['id'] }).to eq([recent.id])
+        expect(json_response['meta']['total_count']).to eq(3)
+        expect(json_response['data'].map { |item| item['id'] }).to eq([newest.id, middle.id])
+        expect(json_response['data'].map { |item| item['id'] }).not_to include(older.id)
       end
 
       it 'lists the newest deliveries first' do
@@ -107,13 +116,17 @@ describe 'Admin::Deliveries', type: :request do
         expect(json_response['data'].map { |item| item['id'] }).to eq([newer.id, older.id])
       end
 
-      it 'loads deliveries without an extra query per row' do
+      it 'loads serializer associations without queries per delivery row' do
         create_delivery
         get '/api/v1/admin/deliveries', headers: auth_headers(admin)
 
         baseline = sql_queries { get '/api/v1/admin/deliveries', headers: auth_headers(admin) }.size
 
-        create_list(:message, 2, project: project, endpoint: endpoint)
+        2.times do
+          row_project = create(:project)
+          row_endpoint = create(:endpoint, project: row_project)
+          create(:message, project: row_project, endpoint: row_endpoint)
+        end
 
         expect(sql_queries { get '/api/v1/admin/deliveries', headers: auth_headers(admin) }.size).to eq(baseline)
       end

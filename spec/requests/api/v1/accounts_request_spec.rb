@@ -42,7 +42,7 @@ describe 'Accounts', type: :request do
       other_account.update!(plan: User::PRO_PLAN)
       project = create(:project, :with_owner, owner: other_account)
       create(:project_membership, project: project, user: account, role: :maintainer)
-      UserUsagePeriod.reserve_deliveries(user: other_account, quantity: 7, limit: 500_000)
+      UserUsagePeriod.reserve_deliveries!(user: other_account, quantity: 7, limit: 500_000)
 
       get '/api/v1/account', headers: auth_headers(account)
 
@@ -146,7 +146,7 @@ describe 'Accounts', type: :request do
 
     it 'renders the account usage of the current period' do
       create_list(:project, 2, :with_owner, owner: account)
-      UserUsagePeriod.reserve_deliveries(user: account, quantity: 4, limit: 10_000)
+      UserUsagePeriod.reserve_deliveries!(user: account, quantity: 4, limit: 10_000)
 
       patch '/api/v1/account/plan', params: { account: { plan: User::FREE_PLAN } }, headers: auth_headers(account), as: :json
 
@@ -164,6 +164,15 @@ describe 'Accounts', type: :request do
       patch '/api/v1/account/plan', params: { account: { plan: User::PRO_PLAN } }, headers: auth_headers(account), as: :json
 
       expect(other_account.reload.plan).to eq(User::FREE_PLAN)
+    end
+
+    it 'rejects an admin account from changing its own plan' do
+      account.add_role(:admin)
+
+      patch '/api/v1/account/plan', params: { account: { plan: User::PRO_PLAN } }, headers: auth_headers(account), as: :json
+
+      expect(response).to have_http_status(:unprocessable_entity)
+      expect(account.reload.plan).to eq(User::FREE_PLAN)
     end
 
     it 'rejects an unknown plan' do

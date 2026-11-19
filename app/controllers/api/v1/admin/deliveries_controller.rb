@@ -4,6 +4,7 @@ module Api
       class DeliveriesController < BaseController
         def index
           scope = ::Admin::DeliveriesQuery.call(Message.all, **query_params)
+                                          .preload(:event, endpoint: :project)
           pagy, deliveries = paginate(scope)
 
           render_resource_collection(deliveries, each_serializer: ::Admin::DeliverySerializer, pagy: pagy)

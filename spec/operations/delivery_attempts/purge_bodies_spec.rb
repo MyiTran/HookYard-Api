@@ -132,6 +132,42 @@ describe DeliveryAttempts::PurgeBodies, type: :operation do
       end
     end
 
+    context 'when the project has no explicit billing owner' do
+      let(:legacy_owner) { create(:user, plan: User::FREE_PLAN) }
+      let(:project) do
+        project = create(:project)
+        project.update_column(:billing_owner_id, nil)
+        create(:project_membership, project: project, user: legacy_owner, role: :owner)
+        project.reload
+      end
+
+      it 'resolves the single owner membership as the billing owner' do
+        attempt = create_attempt(project: project, created_at: now - 4.days)
+
+        described_class.call(now: now)
+
+        expect(attempt.reload.bodies_purged_at).to eq(now)
+      end
+    end
+
+    context 'when the project has no explicit billing owner and no owner membership' do
+      let(:project) do
+        project = create(:project)
+        project.update_column(:billing_owner_id, nil)
+        project.reload
+      end
+
+      it 'skips the project instead of purging under an arbitrary account' do
+        attempt = create_attempt(project: project, created_at: now - 40.days)
+
+        described_class.call(now: now)
+
+        attempt.reload
+        expect(attempt.request_body).to eq('{"id":"evt"}')
+        expect(attempt.bodies_purged_at).to be_nil
+      end
+    end
+
     context 'when the same window is purged again' do
       let(:project) { create(:project, :with_owner, owner: create(:user, plan: User::FREE_PLAN)) }
       let!(:attempt) { create_attempt(project: project, created_at: now - 4.days) }

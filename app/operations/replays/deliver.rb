@@ -122,7 +122,7 @@ module Replays
 
             record_result(claim.attempt, result)
             finish_item(result)
-            Webhooks::CircuitTracker.apply(endpoint: endpoint.reload, result: result)
+            resolve_circuit!(endpoint.reload, result)
           end
         end
       end
@@ -158,6 +158,21 @@ module Replays
       else
         item.mark_failed!(error_type: failure_type(result), error_message: failure_message(result))
       end
+    end
+
+    def resolve_circuit!(endpoint, result)
+      if Webhooks::CircuitPolicy.success?(result)
+        reset_circuit_failures!(endpoint)
+      else
+        endpoint.register_circuit_failure!(result)
+      end
+    end
+
+    def reset_circuit_failures!(endpoint)
+      return unless endpoint.enabled?
+      return if endpoint.circuit_failure_count.zero?
+
+      endpoint.update!(circuit_failure_count: 0)
     end
 
     def failure_type(result)

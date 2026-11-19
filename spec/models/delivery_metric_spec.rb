@@ -62,6 +62,24 @@ describe DeliveryMetric, type: :model do
 
       expect(described_class.count).to eq(0)
     end
+
+    it 'does not count a whitespace-only transport error' do
+      delivery_attempt = attempt(response_status: nil, error_type: '   ')
+
+      described_class.record_attempt!(delivery_attempt)
+
+      expect(described_class.count).to eq(0)
+      expect(delivery_attempt.reload.metrics_recorded_at).to be_nil
+    end
+
+    it 'leaves an attempt available for backfill when metric persistence fails' do
+      delivery_attempt = attempt(response_status: 201)
+      allow(described_class).to receive(:upsert_all).and_raise(ActiveRecord::StatementInvalid)
+
+      expect { described_class.record_attempt!(delivery_attempt) }.not_to raise_error
+
+      expect(delivery_attempt.reload.metrics_recorded_at).to be_nil
+    end
   end
 
   describe '.backfill_missing!' do
@@ -118,6 +136,14 @@ describe DeliveryMetric, type: :model do
       )
 
       expect { described_class.backfill_missing! }.not_to change(described_class, :count)
+    end
+
+    it 'ignores a whitespace-only transport error' do
+      completed_attempt(message: message, response_status: nil, error_type: '  ')
+
+      described_class.backfill_missing!
+
+      expect(described_class.count).to eq(0)
     end
 
     it 'is idempotent and does not count an attempt twice' do

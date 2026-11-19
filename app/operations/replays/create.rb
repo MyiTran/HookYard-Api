@@ -18,7 +18,8 @@ module Replays
       run, item = ReplayRun.transaction do
         message.lock!
         reject_ineligible(message)
-        build_run(message, actor)
+        reserved_at = reserve_quota!(message.endpoint.project)
+        build_run(message, actor, reserved_at)
       end
 
       job.perform_later(item.id) if item.queued?
@@ -32,7 +33,7 @@ module Replays
 
     attr_reader :job
 
-    def build_run(message, actor)
+    def build_run(message, actor, reserved_at)
       endpoint = message.endpoint
       run = ReplayRun.create!(
         project: endpoint.project,
@@ -45,10 +46,17 @@ module Replays
         message: message,
         endpoint: endpoint,
         status: initial_status(endpoint),
-        hold_reason: initial_hold_reason(endpoint)
+        hold_reason: initial_hold_reason(endpoint),
+        quota_reserved_at: reserved_at
       )
 
       [run, item]
+    end
+
+    def reserve_quota!(project)
+      at = Time.current
+      Plans::Quota.reserve_deliveries!(project: project, quantity: 1, at: at)
+      at
     end
 
     def reject_ineligible(message)

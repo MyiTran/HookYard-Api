@@ -39,15 +39,67 @@ describe Ai::FallbackDiagnosis do
       )
     end
 
-    it 'marks a receiver server error as receiver_server_error' do
-      [500, 502, 503, 504].each do |status|
+    it 'marks a not-found receiver as endpoint_gone' do
+      expect(described_class.for(attempt_for(response_status: 404)).label).to eq(Ai::Diagnosis::ENDPOINT_GONE)
+    end
+
+    [400, 409, 415, 422].each do |status|
+      it "marks a #{status} rejection as payload_rejected" do
         result = described_class.for(attempt_for(response_status: status))
 
         expect(result).to have_attributes(
-          label: Ai::Diagnosis::RECEIVER_SERVER_ERROR,
-          suggested_action: 'Inspect the receiver server logs, recover the endpoint, then retry delivery.',
+          label: Ai::Diagnosis::PAYLOAD_REJECTED,
+          suggested_action: 'Validate the webhook payload against the receiver contract, then retry delivery.',
           source: Ai::Diagnosis::SOURCE_FALLBACK,
           model: nil
+        )
+      end
+    end
+
+    [408, 504].each do |status|
+      it "marks a #{status} response as handler_timeout" do
+        expect(described_class.for(attempt_for(response_status: status)).label).to eq(Ai::Diagnosis::HANDLER_TIMEOUT)
+      end
+    end
+
+    it 'marks a rate limit as rate_limited' do
+      result = described_class.for(attempt_for(response_status: 429))
+
+      expect(result).to have_attributes(
+        label: Ai::Diagnosis::RATE_LIMITED,
+        suggested_action: 'Reduce the delivery rate or retry after the receiver rate limit resets.'
+      )
+    end
+
+    it 'maps receiver 5xx responses to unknown because no dedicated receiver-error label exists' do
+      [500, 502, 503].each do |status|
+        result = described_class.for(attempt_for(response_status: status))
+
+        expect(result).to have_attributes(
+          label: Ai::Diagnosis::UNKNOWN,
+          suggested_action: 'Review the latest delivery attempt and receiver logs, then correct the endpoint before retrying.',
+          source: Ai::Diagnosis::SOURCE_FALLBACK,
+          model: nil
+        )
+      end
+    end
+
+    it 'marks a TLS failure as tls_failure' do
+      result = described_class.for(attempt_for(error_type: OpenSSL::SSL::SSLError.name))
+
+      expect(result).to have_attributes(
+        label: Ai::Diagnosis::TLS_FAILURE,
+        suggested_action: 'Check the receiver TLS certificate and supported TLS configuration, then retry delivery.'
+      )
+    end
+
+    it 'falls back to unknown for non-TLS DNS and connection transport failures' do
+      [SocketError.name, Errno::ECONNRESET.name, Errno::ECONNREFUSED.name].each do |error_type|
+        result = described_class.for(attempt_for(error_type: error_type))
+
+        expect(result).to have_attributes(
+          label: Ai::Diagnosis::UNKNOWN,
+          suggested_action: 'Review the latest delivery attempt and receiver logs, then correct the endpoint before retrying.'
         )
       end
     end
@@ -69,10 +121,39 @@ describe Ai::FallbackDiagnosis do
       expect(result.suggested_action).to be_present
     end
 
-    it 'treats a resolved HTTP error as a receiver failure, not a transport timeout' do
-      attempt = attempt_for(response_status: 504, error_type: nil)
+    it 'classifies the newest attempt from a collection' do
+      newer = attempt_for(response_status: 400)
+      older = attempt_for(response_status: 401)
 
-      expect(described_class.for(attempt).label).to eq(Ai::Diagnosis::RECEIVER_SERVER_ERROR)
+      expect(described_class.for([newer, older]).label).to eq(Ai::Diagnosis::PAYLOAD_REJECTED)
+    end
+
+    it 'chooses the dominant label across all selected attempts' do
+      attempts = Array.new(8) { attempt_for(response_status: 400) } +
+                 Array.new(2) { attempt_for(response_status: 500) }
+
+      result = described_class.for(attempts)
+
+      expect(result.label).to eq(Ai::Diagnosis::PAYLOAD_REJECTED)
+      expect(result.analyzed_attempt_count).to eq(10)
+    end
+
+    it 'breaks a tie using the newest attempt when the newest is payload_rejected' do
+      attempts = Array.new(5) { attempt_for(response_status: 400) } +
+                 Array.new(5) { attempt_for(response_status: 500) }
+
+      result = described_class.for(attempts)
+
+      expect(result.label).to eq(Ai::Diagnosis::PAYLOAD_REJECTED)
+    end
+
+    it 'breaks a tie using the newest attempt when the newest is unknown' do
+      attempts = Array.new(5) { attempt_for(response_status: 500) } +
+                 Array.new(5) { attempt_for(response_status: 400) }
+
+      result = described_class.for(attempts)
+
+      expect(result.label).to eq(Ai::Diagnosis::UNKNOWN)
     end
   end
 end

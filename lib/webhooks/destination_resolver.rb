@@ -4,15 +4,15 @@ require 'timeout'
 
 module Webhooks
   # Resolves a validated webhook host to one pinned public IP address.
-  # A host is either rejected by policy (non-public, rebinding) or cannot be
-  # resolved right now (transient DNS failure); the two must stay distinguishable
-  # so a temporary resolver outage is retried instead of terminating the message.
+  # Pinning prevents a hostname from changing to an unsafe address at request time.
+  # Policy rejections (NotPubliclyRoutable) are permanent, while DNS failures
+  # (ResolutionFailed) are transient and must stay retryable.
   class DestinationResolver
     class NotPubliclyRoutable < StandardError; end
     class ResolutionFailed < StandardError; end
 
     NOT_ROUTABLE_MESSAGE = 'destination is not publicly routable'
-    RESOLUTION_FAILED_MESSAGE = 'destination hostname could not be resolved'
+    RESOLUTION_FAILED_MESSAGE = 'destination resolution failed'
 
     def initialize(timeout: Constants::WEBHOOK_DNS_RESOLUTION_TIMEOUT_SECONDS)
       @timeout = timeout
@@ -45,7 +45,7 @@ module Webhooks
 
     def resolve_addresses(hostname)
       Timeout.timeout(timeout) { Resolv.getaddresses(hostname).filter_map { |address| parse_ip(address) } }
-    rescue Timeout::Error, Resolv::ResolvError
+    rescue Timeout::Error, Resolv::ResolvError, SocketError
       raise ResolutionFailed, RESOLUTION_FAILED_MESSAGE
     end
 

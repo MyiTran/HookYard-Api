@@ -85,7 +85,6 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_10_100003) do
     t.index ["endpoint_id", "created_at"], name: "index_circuit_probes_on_endpoint_id_and_created_at"
     t.index ["endpoint_id", "status"], name: "index_circuit_probes_on_endpoint_id_and_status"
     t.index ["endpoint_id"], name: "index_circuit_probes_on_endpoint_id"
-    t.check_constraint "status::text = ANY (ARRAY['pending'::character varying, 'succeeded'::character varying, 'failed'::character varying]::text[])", name: "circuit_probes_status_check"
   end
 
   create_table "delivery_attempts", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -111,6 +110,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_10_100003) do
     t.uuid "replay_item_id"
     t.datetime "metrics_recorded_at"
     t.index ["created_at"], name: "index_delivery_attempts_on_bodies_pending_purge", where: "((bodies_purged_at IS NULL) AND ((response_status IS NOT NULL) OR (error_type IS NOT NULL)))"
+    t.index ["id"], name: "index_delivery_attempts_on_unrecorded_metrics", where: "(metrics_recorded_at IS NULL)"
     t.index ["message_id", "attempt_number"], name: "index_delivery_attempts_on_message_id_and_attempt_number", unique: true
     t.index ["message_id", "created_at"], name: "index_delivery_attempts_on_message_id_and_created_at"
     t.index ["message_id"], name: "index_delivery_attempts_on_message_id"
@@ -130,9 +130,6 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_10_100003) do
     t.datetime "updated_at", null: false
     t.index ["project_id", "day"], name: "index_delivery_metrics_on_project_id_and_day", unique: true
     t.index ["project_id"], name: "index_delivery_metrics_on_project_id"
-    t.check_constraint "attempts_count >= 0", name: "delivery_metrics_attempts_count_non_negative"
-    t.check_constraint "failures_count >= 0", name: "delivery_metrics_failures_count_non_negative"
-    t.check_constraint "successes_count >= 0", name: "delivery_metrics_successes_count_non_negative"
   end
 
   create_table "endpoint_diagnoses", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -186,9 +183,6 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_10_100003) do
     t.index ["circuit_state", "circuit_next_probe_at"], name: "index_endpoints_on_circuit_state_and_next_probe_at"
     t.index ["project_id"], name: "index_endpoints_on_project_id"
     t.check_constraint "NOT ('*'::text = ANY (event_types::text[])) OR cardinality(event_types) = 1", name: "endpoints_wildcard_subscription_exclusive"
-    t.check_constraint "circuit_failure_count >= 0", name: "endpoints_circuit_failure_count_non_negative"
-    t.check_constraint "circuit_state::text = ANY (ARRAY['enabled'::character varying, 'circuit_open'::character varying, 'disabled'::character varying]::text[])", name: "endpoints_circuit_state_valid"
-    t.check_constraint "queued_message_count >= 0", name: "endpoints_queued_message_count_non_negative"
   end
 
   create_table "events", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -212,6 +206,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_10_100003) do
     t.uuid "endpoint_id"
     t.string "reason", null: false
     t.string "event_type"
+    t.string "idempotency_key"
     t.jsonb "payload", default: {}, null: false
     t.datetime "created_at", null: false
     t.string "idempotency_key_digest"
@@ -245,9 +240,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_10_100003) do
     t.index ["status", "next_retry_at"], name: "index_messages_on_status_and_next_retry_at"
     t.index ["updated_at"], name: "index_messages_on_pending_updated_at", where: "((status)::text = 'pending'::text)"
     t.check_constraint "attempt_count >= 0", name: "messages_attempt_count_non_negative"
-    t.check_constraint "hold_reason IS NULL OR (hold_reason::text = ANY (ARRAY['endpoint_circuit_open'::character varying, 'endpoint_disabled'::character varying]::text[]))", name: "messages_hold_reason_valid"
-    t.check_constraint "status::text = 'pending'::text OR held_at IS NULL AND hold_reason IS NULL", name: "messages_hold_requires_pending"
-    t.check_constraint "status::text = ANY (ARRAY['pending'::character varying, 'delivering'::character varying, 'succeeded'::character varying, 'failed'::character varying]::text[])", name: "messages_status_valid"
+    t.check_constraint "status::text = ANY (ARRAY['pending'::character varying::text, 'delivering'::character varying::text, 'succeeded'::character varying::text, 'failed'::character varying::text])", name: "messages_status_valid"
   end
 
   create_table "notifications", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -316,11 +309,8 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_10_100003) do
     t.datetime "updated_at", null: false
     t.integer "delivery_timeout_seconds"
     t.integer "delivery_retry_delays_seconds", array: true
-    t.uuid "billing_owner_id", null: false
+    t.uuid "billing_owner_id"
     t.index ["billing_owner_id"], name: "index_projects_on_billing_owner_id"
-    t.check_constraint "delivery_retry_delays_seconds IS NULL OR (0 < ALL (delivery_retry_delays_seconds))", name: "projects_delivery_retry_delays_positive"
-    t.check_constraint "delivery_retry_delays_seconds IS NULL OR cardinality(delivery_retry_delays_seconds) >= 1 AND cardinality(delivery_retry_delays_seconds) <= 7", name: "projects_delivery_retry_delays_size"
-    t.check_constraint "delivery_timeout_seconds IS NULL OR delivery_timeout_seconds >= 1 AND delivery_timeout_seconds <= 30", name: "projects_delivery_timeout_seconds_range"
   end
 
   create_table "replay_items", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -337,13 +327,14 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_10_100003) do
     t.datetime "completed_at"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.datetime "quota_reserved_at"
     t.index ["endpoint_id", "status"], name: "index_replay_items_on_endpoint_id_and_status"
     t.index ["endpoint_id"], name: "index_replay_items_on_endpoint_id"
-    t.index ["message_id"], name: "index_replay_items_on_active_message", unique: true, where: "((status)::text = ANY ((ARRAY['queued'::character varying, 'held'::character varying, 'delivering'::character varying])::text[]))"
+    t.index ["message_id"], name: "index_replay_items_on_active_message", unique: true, where: "((status)::text = ANY (ARRAY[('queued'::character varying)::text, ('held'::character varying)::text, ('delivering'::character varying)::text]))"
     t.index ["message_id"], name: "index_replay_items_on_message_id"
     t.index ["replay_run_id", "status"], name: "index_replay_items_on_replay_run_id_and_status"
     t.index ["replay_run_id"], name: "index_replay_items_on_replay_run_id"
-    t.check_constraint "status::text = ANY (ARRAY['queued'::character varying, 'held'::character varying, 'delivering'::character varying, 'succeeded'::character varying, 'failed'::character varying, 'skipped'::character varying]::text[])", name: "replay_items_status_valid"
+    t.check_constraint "status::text = ANY (ARRAY['queued'::character varying::text, 'held'::character varying::text, 'delivering'::character varying::text, 'succeeded'::character varying::text, 'failed'::character varying::text, 'skipped'::character varying::text])", name: "replay_items_status_valid"
   end
 
   create_table "replay_runs", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -355,10 +346,13 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_10_100003) do
     t.datetime "materialized_at"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.datetime "as_of"
+    t.datetime "failed_at"
+    t.string "failure_reason"
     t.index ["actor_id"], name: "index_replay_runs_on_actor_id"
     t.index ["project_id", "created_at"], name: "index_replay_runs_on_project_id_and_created_at"
     t.index ["project_id"], name: "index_replay_runs_on_project_id"
-    t.check_constraint "mode::text = ANY (ARRAY['single'::character varying, 'bulk'::character varying]::text[])", name: "replay_runs_mode_valid"
+    t.check_constraint "mode::text = ANY (ARRAY['single'::character varying::text, 'bulk'::character varying::text])", name: "replay_runs_mode_valid"
     t.check_constraint "requested_count >= 0", name: "replay_runs_requested_count_non_negative"
   end
 
@@ -406,7 +400,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_10_100003) do
     t.index ["confirmation_token"], name: "index_users_on_confirmation_token", unique: true
     t.index ["email"], name: "index_users_on_email", unique: true
     t.index ["reset_password_token"], name: "index_users_on_reset_password_token", unique: true
-    t.check_constraint "plan::text = ANY (ARRAY['free'::character varying, 'pro'::character varying]::text[])", name: "users_plan_valid"
+    t.check_constraint "plan::text = ANY (ARRAY['free'::character varying::text, 'pro'::character varying::text])", name: "users_plan_valid"
   end
 
   create_table "users_roles", id: false, force: :cascade do |t|
@@ -445,7 +439,6 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_10_100003) do
   add_foreign_key "project_invitations", "users", column: "recipient_id", on_delete: :cascade
   add_foreign_key "project_memberships", "projects", on_delete: :cascade
   add_foreign_key "project_memberships", "users", on_delete: :cascade
-  add_foreign_key "projects", "users", column: "billing_owner_id", on_delete: :restrict
   add_foreign_key "replay_items", "endpoints", on_delete: :cascade
   add_foreign_key "replay_items", "messages", on_delete: :cascade
   add_foreign_key "replay_items", "replay_runs", on_delete: :cascade

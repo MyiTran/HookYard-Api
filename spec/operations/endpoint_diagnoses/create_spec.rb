@@ -6,11 +6,11 @@ describe EndpointDiagnoses::Create, type: :operation do
   let(:endpoint) { create(:endpoint, project: project) }
   let(:message) { create(:message, project: project, endpoint: endpoint, status: :failed) }
   let(:ai_result) { nil }
-  let(:analyzed_attempt_count) { 1 }
   let(:diagnoser) do
-    instance_double(Ai::GeminiFailureDiagnoser, call: ai_result, analyzed_attempt_count: analyzed_attempt_count)
+    instance_double(Ai::GeminiFailureDiagnoser, call: ai_result)
   end
-  let(:operation) { described_class.new(diagnoser: diagnoser) }
+  let(:guard) { instance_double(EndpointDiagnosisGuard) }
+  let(:operation) { described_class.new(diagnoser: diagnoser, guard: guard) }
 
   def attempt(**attributes)
     create(:delivery_attempt, message: message, **attributes)
@@ -25,13 +25,19 @@ describe EndpointDiagnoses::Create, type: :operation do
   end
 
   describe '.call' do
+    before do
+      allow(guard).to receive(:with_lock).and_yield
+      allow(guard).to receive(:mark_success!)
+    end
+
     context 'when the provider returns a validated answer' do
       let(:ai_result) do
         Ai::Diagnosis::Result.new(
           label: Ai::Diagnosis::HANDLER_TIMEOUT,
           suggested_action: 'Raise the receiver timeout and retry the delivery.',
           source: Ai::Diagnosis::SOURCE_AI,
-          model: 'gemini-test-model'
+          model: 'gemini-test-model',
+          analyzed_attempt_count: 1
         )
       end
 
@@ -54,15 +60,27 @@ describe EndpointDiagnoses::Create, type: :operation do
       end
     end
 
-    context 'when only some fetched attempts fit the provider budget' do
-      it 'records the contexts actually sent to the provider' do
-        attempt(response_status: 500, created_at: 2.minutes.ago)
-        attempt(response_status: 503, created_at: 1.minute.ago)
+    context 'when the provider trims the selected attempts before calling Gemini' do
+      let(:ai_result) do
+        Ai::Diagnosis::Result.new(
+          label: Ai::Diagnosis::PAYLOAD_REJECTED,
+          suggested_action: 'Validate the payload and retry.',
+          source: Ai::Diagnosis::SOURCE_AI,
+          model: 'gemini-test-model',
+          analyzed_attempt_count: 3
+        )
+      end
+
+      it 'records the attempts actually included in the provider context' do
+        10.times { attempt(response_status: 400) }
 
         diagnosis = diagnose
 
+        expect(diagnosis).to have_attributes(
+          source: EndpointDiagnosis::SOURCE_AI,
+          analyzed_attempt_count: 3
+        )
         expect(diagnoser).to have_received(:call).with(array_including(instance_of(DeliveryAttempt)))
-        expect(diagnosis.analyzed_attempt_count).to eq(analyzed_attempt_count)
       end
     end
 
@@ -79,6 +97,32 @@ describe EndpointDiagnoses::Create, type: :operation do
           analyzed_attempt_count: 1
         )
       end
+
+      it 'classifies and counts all payload rejections in fallback mode' do
+        10.times { attempt(response_status: 400) }
+
+        diagnosis = diagnose
+
+        expect(diagnosis).to have_attributes(
+          label: Ai::Diagnosis::PAYLOAD_REJECTED,
+          source: EndpointDiagnosis::SOURCE_FALLBACK,
+          model: nil,
+          analyzed_attempt_count: 10
+        )
+      end
+
+      it 'uses the dominant fallback label across mixed failures' do
+        8.times { attempt(response_status: 400) }
+        2.times { attempt(response_status: 500) }
+
+        diagnosis = diagnose
+
+        expect(diagnosis).to have_attributes(
+          label: Ai::Diagnosis::PAYLOAD_REJECTED,
+          source: EndpointDiagnosis::SOURCE_FALLBACK,
+          analyzed_attempt_count: 10
+        )
+      end
     end
 
     [
@@ -86,7 +130,7 @@ describe EndpointDiagnoses::Create, type: :operation do
       [Ai::Diagnosis::AUTH_EXPIRED, { response_status: 403 }],
       [Ai::Diagnosis::HANDLER_TIMEOUT, { response_status: nil, error_type: Net::ReadTimeout.name }],
       [Ai::Diagnosis::ENDPOINT_GONE, { response_status: 410 }],
-      [Ai::Diagnosis::RECEIVER_SERVER_ERROR, { response_status: 500 }],
+      [Ai::Diagnosis::UNKNOWN, { response_status: 500 }],
       [Ai::Diagnosis::UNKNOWN, { response_status: 302 }]
     ].each do |label, attributes|
       context "when the newest attempt failed with #{attributes.inspect}" do
@@ -99,18 +143,18 @@ describe EndpointDiagnoses::Create, type: :operation do
     end
 
     context 'when the receiver answers with a server error' do
-      it 'persists the receiver server error with a recovery action' do
+      it 'persists the unknown fallback with a recovery action' do
         attempt(response_status: 503)
 
         diagnosis = diagnose
 
         expect(diagnosis).to have_attributes(
-          label: Ai::Diagnosis::RECEIVER_SERVER_ERROR,
+          label: Ai::Diagnosis::UNKNOWN,
           source: EndpointDiagnosis::SOURCE_FALLBACK,
           model: nil
         )
         expect(diagnosis.suggested_action).to eq(
-          Ai::FallbackDiagnosis::ACTIONS.fetch(Ai::Diagnosis::RECEIVER_SERVER_ERROR)
+          Ai::FallbackDiagnosis::ACTIONS.fetch(Ai::Diagnosis::UNKNOWN)
         )
         expect(Ai::Diagnosis::LABELS).to include(diagnosis.label)
       end
@@ -121,17 +165,18 @@ describe EndpointDiagnoses::Create, type: :operation do
         attempt(response_status: 502)
         allow(diagnoser).to receive(:call).and_return(
           Ai::Diagnosis::Result.new(
-            label: Ai::Diagnosis::RECEIVER_SERVER_ERROR,
+            label: Ai::Diagnosis::UNKNOWN,
             suggested_action: 'Check the receiver 5xx logs and recover the endpoint.',
             source: Ai::Diagnosis::SOURCE_AI,
-            model: 'gemini-test-model'
+            model: 'gemini-test-model',
+            analyzed_attempt_count: 1
           )
         )
 
         diagnosis = diagnose
 
         expect(diagnosis).to have_attributes(
-          label: Ai::Diagnosis::RECEIVER_SERVER_ERROR,
+          label: Ai::Diagnosis::UNKNOWN,
           source: EndpointDiagnosis::SOURCE_AI,
           model: 'gemini-test-model'
         )
@@ -139,18 +184,11 @@ describe EndpointDiagnoses::Create, type: :operation do
     end
 
     context 'when the endpoint has no delivery history' do
-      let(:analyzed_attempt_count) { 0 }
-
-      it 'still persists an unknown fallback' do
-        diagnosis = diagnose
-
-        expect(diagnosis).to be_persisted
-        expect(diagnosis).to have_attributes(
-          label: Ai::Diagnosis::UNKNOWN,
-          source: EndpointDiagnosis::SOURCE_FALLBACK,
-          analyzed_attempt_count: 0
-        )
-        expect(diagnosis.suggested_action).to be_present
+      it 'returns a 422 error and persists nothing' do
+        expect { diagnose }
+          .to raise_error(ApiError::UnprocessableEntityError, described_class::NO_ATTEMPTS_MESSAGE)
+        expect(EndpointDiagnosis.count).to eq(0)
+        expect(diagnoser).not_to have_received(:call)
       end
     end
 
@@ -174,26 +212,17 @@ describe EndpointDiagnoses::Create, type: :operation do
     end
 
     context 'when the endpoint only has successful deliveries' do
-      let(:analyzed_attempt_count) { 0 }
-
-      it 'sends no evidence to the provider and keeps the unknown fallback' do
+      it 'returns a 422 error and persists nothing' do
         [200, 201, 202, 204].each { |status| attempt(response_status: status) }
 
-        diagnosis = diagnose
-
-        expect(diagnoser).to have_received(:call) { |analyzed| expect(analyzed).to be_empty }
-        expect(diagnosis).to have_attributes(
-          label: Ai::Diagnosis::UNKNOWN,
-          source: EndpointDiagnosis::SOURCE_FALLBACK,
-          model: nil,
-          analyzed_attempt_count: 0
-        )
+        expect { diagnose }
+          .to raise_error(ApiError::UnprocessableEntityError, described_class::NO_ATTEMPTS_MESSAGE)
+        expect(EndpointDiagnosis.count).to eq(0)
+        expect(diagnoser).not_to have_received(:call)
       end
     end
 
     context 'when successful and failed attempts are mixed' do
-      let(:analyzed_attempt_count) { 3 }
-
       it 'sends only the failed attempts, newest first' do
         attempt(response_status: 200, created_at: 5.minutes.ago)
         rejected = attempt(response_status: 400, created_at: 3.minutes.ago)
@@ -253,7 +282,6 @@ describe EndpointDiagnoses::Create, type: :operation do
     context 'when the endpoint attempts come from replayed messages' do
       let(:message_a) { create(:message, project: project, endpoint: endpoint, status: :failed) }
       let(:message_b) { create(:message, project: project, endpoint: endpoint, status: :failed) }
-      let(:analyzed_attempt_count) { 4 }
 
       def replayed_attempts
         {
@@ -279,8 +307,6 @@ describe EndpointDiagnoses::Create, type: :operation do
       end
 
       context 'when the configured limit is smaller than the attempt history' do
-        let(:analyzed_attempt_count) { 2 }
-
         it 'keeps only the newest attempts and drops the older originals' do
           attempts = replayed_attempts
           allow(Ai::AttemptContext).to receive(:attempt_limit).and_return(2)
@@ -297,8 +323,6 @@ describe EndpointDiagnoses::Create, type: :operation do
     end
 
     context 'when the newest attempt timed out without any response' do
-      let(:analyzed_attempt_count) { 2 }
-
       it 'selects it and falls back to handler_timeout' do
         attempt(response_status: 500, created_at: 5.minutes.ago)
         timeout = attempt(response_status: nil, error_type: Net::ReadTimeout.name,
@@ -348,18 +372,13 @@ describe EndpointDiagnoses::Create, type: :operation do
     end
 
     context 'when the only attempt is still in flight' do
-      let(:analyzed_attempt_count) { 0 }
-
-      it 'ignores the endpoint attempt' do
+      it 'returns a 422 error and persists nothing' do
         create(:delivery_attempt, message: message)
 
-        diagnosis = diagnose
-
-        expect(diagnosis).to have_attributes(
-          label: Ai::Diagnosis::UNKNOWN,
-          source: EndpointDiagnosis::SOURCE_FALLBACK,
-          analyzed_attempt_count: 0
-        )
+        expect { diagnose }
+          .to raise_error(ApiError::UnprocessableEntityError, described_class::NO_ATTEMPTS_MESSAGE)
+        expect(EndpointDiagnosis.count).to eq(0)
+        expect(diagnoser).not_to have_received(:call)
       end
     end
 
@@ -387,11 +406,13 @@ describe EndpointDiagnoses::Create, type: :operation do
       first = diagnose
       snapshot = first.reload.attributes
 
-      second = diagnose
+      travel(31.seconds) do
+        second = diagnose
 
-      expect(EndpointDiagnosis.count).to eq(2)
-      expect(second.id).not_to eq(first.id)
-      expect(first.reload.attributes).to eq(snapshot)
+        expect(EndpointDiagnosis.count).to eq(2)
+        expect(second.id).not_to eq(first.id)
+        expect(first.reload.attributes).to eq(snapshot)
+      end
     end
 
     it 'keeps the earlier diagnosis when a later replay succeeds' do
@@ -405,12 +426,15 @@ describe EndpointDiagnoses::Create, type: :operation do
         analyzed << attempts
         nil
       end
-      latest = diagnose
 
-      expect(analyzed.last).to eq([failed])
-      expect(previous.reload.attributes).to eq(snapshot)
-      expect(EndpointDiagnosis.count).to eq(2)
-      expect(latest.id).not_to eq(previous.id)
+      travel(31.seconds) do
+        latest = diagnose
+
+        expect(analyzed.last).to eq([failed])
+        expect(previous.reload.attributes).to eq(snapshot)
+        expect(EndpointDiagnosis.count).to eq(2)
+        expect(latest.id).not_to eq(previous.id)
+      end
     end
 
     it 'does not touch delivery state, circuit state, queue jobs or usage' do
@@ -438,5 +462,85 @@ describe EndpointDiagnoses::Create, type: :operation do
       expect(UserUsagePeriod.order(:id).map(&:attributes)).to eq(usage_before)
       expect(ActiveJob::Base.queue_adapter.enqueued_jobs.size).to eq(enqueued)
     end
+
+    context 'when the diagnosis guard rejects the request' do
+      before do
+        create(:delivery_attempt, message: message, response_status: 500)
+        allow(guard).to receive(:with_lock).and_raise(
+          ApiError::DiagnosisCooldownError.new(retry_after: 12)
+        )
+      end
+
+      it 'raises the public 429 error without calling Gemini or persisting a diagnosis' do
+        expect { diagnose }.to raise_error(ApiError::DiagnosisCooldownError) do |error|
+          expect(error.status).to eq(429)
+          expect(error.headers['Retry-After']).to eq('12')
+        end
+
+        expect(diagnoser).not_to have_received(:call)
+        expect(EndpointDiagnosis.count).to eq(0)
+      end
+    end
+
+    context 'when a diagnosis persists' do
+      it 'starts the cooldown after a Gemini success' do
+        create(:delivery_attempt, message: message, response_status: 500)
+        allow(diagnoser).to receive(:call).and_return(
+          Ai::Diagnosis::Result.new(
+            label: Ai::Diagnosis::UNKNOWN,
+            suggested_action: 'Check the receiver 5xx logs.',
+            source: Ai::Diagnosis::SOURCE_AI,
+            model: 'gemini-test-model',
+            analyzed_attempt_count: 1
+          )
+        )
+
+        diagnose
+
+        expect(guard).to have_received(:mark_success!).with(endpoint: endpoint)
+      end
+
+      it 'starts the cooldown after a safe fallback persistence' do
+        create(:delivery_attempt, message: message, response_status: 500)
+
+        diagnose
+
+        expect(guard).to have_received(:mark_success!).with(endpoint: endpoint)
+      end
+    end
+  end
+
+  describe 'cooldown guard integration' do
+    let(:redis) { FakeRedis.new }
+    let(:guard) { EndpointDiagnosisGuard.new(redis: redis) }
+    let(:operation) { described_class.new(diagnoser: diagnoser, guard: guard) }
+
+    it 'rejects another actor on the same endpoint during the endpoint-wide cooldown' do
+      create(:delivery_attempt, message: message, response_status: 500)
+      first = diagnose
+
+      expect(first).to be_persisted
+      expect(redis.cooldowns).to have_key(cooldown_key)
+
+      other_actor = create(:user)
+      create(:project_membership, project: project, user: other_actor, role: :maintainer)
+
+      expect { operation.call(endpoint: endpoint, actor: other_actor) }
+        .to raise_error(ApiError::DiagnosisCooldownError)
+    end
+
+    it 'returns the persisted diagnosis when the cooldown mark fails' do
+      create(:delivery_attempt, message: message, response_status: 500)
+      redis.fail_cooldown = true
+
+      diagnosis = diagnose
+
+      expect(diagnosis).to be_persisted
+      expect(EndpointDiagnosis.count).to eq(1)
+    end
+  end
+
+  def cooldown_key
+    "endpoint_diagnosis:cooldown:#{project.id}:#{endpoint.id}"
   end
 end

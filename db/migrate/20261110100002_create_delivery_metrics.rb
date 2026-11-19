@@ -10,14 +10,5 @@ class CreateDeliveryMetrics < ActiveRecord::Migration[8.0]
     end
 
     add_index :delivery_metrics, %i[project_id day], unique: true
-    add_check_constraint :delivery_metrics,
-                         'attempts_count >= 0',
-                         name: 'delivery_metrics_attempts_count_non_negative'
-    add_check_constraint :delivery_metrics,
-                         'successes_count >= 0',
-                         name: 'delivery_metrics_successes_count_non_negative'
-    add_check_constraint :delivery_metrics,
-                         'failures_count >= 0',
-                         name: 'delivery_metrics_failures_count_non_negative'
   end
 end

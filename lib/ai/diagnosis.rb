@@ -10,7 +10,6 @@ module Ai
     RATE_LIMITED = 'rate_limited'
     TLS_FAILURE = 'tls_failure'
     ENDPOINT_GONE = 'endpoint_gone'
-    RECEIVER_SERVER_ERROR = 'receiver_server_error'
     UNKNOWN = 'unknown'
 
     LABELS = [
@@ -22,7 +21,6 @@ module Ai
       RATE_LIMITED,
       TLS_FAILURE,
       ENDPOINT_GONE,
-      RECEIVER_SERVER_ERROR,
       UNKNOWN
     ].freeze
 
@@ -31,7 +29,7 @@ module Ai
 
     ACTION_MAX_LENGTH = 240
 
-    Result = Struct.new(:label, :suggested_action, :source, :model, keyword_init: true) do
+    Result = Struct.new(:label, :suggested_action, :source, :model, :analyzed_attempt_count, keyword_init: true) do
       def ai?
         source == SOURCE_AI
       end

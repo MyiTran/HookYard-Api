@@ -7,10 +7,11 @@ module Replays
 
     def call(project:, filters:)
       filters = filters.to_h.symbolize_keys.slice(*ReplayCandidatesQuery::FILTER_KEYS)
+      as_of = Time.current
       scope = ReplayCandidatesQuery.for_project(project)
-      requested_count = ReplayCandidatesQuery.count(scope, eligible: false, **filters)
-      candidates = ReplayCandidatesQuery.call(scope, **filters)
-      eligible_count = ReplayCandidatesQuery.count(scope, **filters)
+      requested_count = ReplayCandidatesQuery.count(scope, eligible: false, as_of: as_of, **filters)
+      candidates = ReplayCandidatesQuery.call(scope, as_of: as_of, **filters)
+      eligible_count = ReplayCandidatesQuery.count(scope, as_of: as_of, **filters)
 
       sample = candidates.reorder(created_at: :desc, id: :desc).limit(SAMPLE_LIMIT).to_a
 

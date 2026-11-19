@@ -33,6 +33,18 @@ describe 'Admin::Accounts', type: :request do
       expect(account.reload.plan).to eq(User::FREE_PLAN)
     end
 
+    it 'lets an admin switch a non-admin customer plan without changing their roles' do
+      customer = create(:user).tap { |user| user.add_role(:support) }
+
+      patch "/api/v1/admin/accounts/#{customer.id}/plan",
+            params: { plan: User::PRO_PLAN }, headers: auth_headers(admin), as: :json
+
+      expect(response).to have_http_status(:ok)
+      expect(customer.reload.plan).to eq(User::PRO_PLAN)
+      expect(customer.reload).to be_support
+      expect(customer.reload).not_to be_admin
+    end
+
     it 'does not mutate project, membership, usage, endpoint, message, or delivery records' do
       project = create(:project, :with_owner, owner: account)
       endpoint = create(:endpoint, project: project)
@@ -103,6 +115,46 @@ describe 'Admin::Accounts', type: :request do
             params: { plan: User::PRO_PLAN }, headers: auth_headers(account), as: :json
 
       expect(response).to have_http_status(:forbidden)
+      expect(account.reload.plan).to eq(User::FREE_PLAN)
+    end
+
+    it 'forbids a project owner without the global admin role' do
+      project_owner = create(:user)
+      create(:project, :with_owner, owner: project_owner)
+
+      patch "/api/v1/admin/accounts/#{account.id}/plan",
+            params: { plan: User::PRO_PLAN }, headers: auth_headers(project_owner), as: :json
+
+      expect(response).to have_http_status(:forbidden)
+      expect(account.reload.plan).to eq(User::FREE_PLAN)
+    end
+
+    it 'forbids a maintainer of the target account project' do
+      project = create(:project, :with_owner, owner: account)
+      maintainer = create(:user)
+      create(:project_membership, project: project, user: maintainer, role: :maintainer)
+
+      patch "/api/v1/admin/accounts/#{account.id}/plan",
+            params: { plan: User::PRO_PLAN }, headers: auth_headers(maintainer), as: :json
+
+      expect(response).to have_http_status(:forbidden)
+      expect(account.reload.plan).to eq(User::FREE_PLAN)
+    end
+
+    it 'forbids an outsider with no project relationship' do
+      outsider = create(:user)
+
+      patch "/api/v1/admin/accounts/#{account.id}/plan",
+            params: { plan: User::PRO_PLAN }, headers: auth_headers(outsider), as: :json
+
+      expect(response).to have_http_status(:forbidden)
+      expect(account.reload.plan).to eq(User::FREE_PLAN)
+    end
+
+    it 'requires authentication' do
+      patch "/api/v1/admin/accounts/#{account.id}/plan", params: { plan: User::PRO_PLAN }, as: :json
+
+      expect(response).to have_http_status(:unauthorized)
       expect(account.reload.plan).to eq(User::FREE_PLAN)
     end
   end

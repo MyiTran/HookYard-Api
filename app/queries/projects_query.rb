@@ -25,13 +25,13 @@ class ProjectsQuery < ApplicationQuery
   end
 
   def by_billing_owner(scope, account_id)
-    return scope unless valid_uuid?(account_id)
+    return scope.none unless valid_uuid?(account_id)
 
     scope.where(billing_owner_id: account_id)
   end
 
   def by_plan(scope, plan)
-    return scope unless User::PLANS.include?(plan.to_s)
+    return scope.none unless User::PLANS.include?(plan.to_s)
 
     scope.joins(:billing_owner).where(users: { plan: plan.to_s })
   end

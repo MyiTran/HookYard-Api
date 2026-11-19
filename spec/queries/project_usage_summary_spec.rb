@@ -9,8 +9,8 @@ describe ProjectUsageSummary do
   describe '#deliveries_for' do
     context 'when the billing accounts metered deliveries in the current period' do
       before do
-        UserUsagePeriod.reserve_deliveries(user: account, quantity: 4, limit: 100, at: at)
-        UserUsagePeriod.reserve_deliveries(user: other_account, quantity: 1, limit: 100, at: at)
+        UserUsagePeriod.reserve_deliveries!(user: account, quantity: 4, limit: 100, at: at)
+        UserUsagePeriod.reserve_deliveries!(user: other_account, quantity: 1, limit: 100, at: at)
       end
 
       it 'reports the monthly usage of each project billing account' do
@@ -23,7 +23,7 @@ describe ProjectUsageSummary do
     end
 
     context 'when a billing account only metered deliveries in another period' do
-      before { UserUsagePeriod.reserve_deliveries(user: account, quantity: 9, limit: 100, at: at - 1.month) }
+      before { UserUsagePeriod.reserve_deliveries!(user: account, quantity: 9, limit: 100, at: at - 1.month) }
 
       it 'reports the current period only' do
         expect(described_class.new(projects, at: at).deliveries_for(projects.first)).to eq(0)
@@ -52,7 +52,7 @@ describe ProjectUsageSummary do
   describe 'query count' do
     it 'reads the usage of any number of projects with the same number of queries' do
       create_list(:endpoint, 2, project: projects.first)
-      UserUsagePeriod.reserve_deliveries(user: account, quantity: 2, limit: 100, at: at)
+      UserUsagePeriod.reserve_deliveries!(user: account, quantity: 2, limit: 100, at: at)
       single_summary = described_class.new([projects.first], at: at)
       many_summary = described_class.new(projects, at: at)
 

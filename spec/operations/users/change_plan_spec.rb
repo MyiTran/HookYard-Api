@@ -87,11 +87,22 @@ describe Users::ChangePlan, type: :operation do
       it 'blocks new deliveries once the free monthly limit is consumed' do
         endpoints.first.update!(event_types: [Endpoint::WILDCARD_EVENT_TYPE])
         free_limit = Plans::Entitlements.definition_for(User::FREE_PLAN).monthly_delivery_limit
-        UserUsagePeriod.reserve_deliveries(user: account, quantity: free_limit, limit: free_limit)
+        UserUsagePeriod.reserve_deliveries!(user: account, quantity: free_limit, limit: free_limit)
         described_class.call(user: account, plan: User::FREE_PLAN)
 
         expect { Events::Ingest.call(project: project, attributes: { event_type: 'order.created', payload: {}, idempotency_key: 'key-1' }) }
           .to raise_error(ApiError::PlanLimitExceededError)
+      end
+    end
+
+    context 'when the target account is a system admin' do
+      let(:account) { create(:user).tap { |user| user.add_role(:admin) } }
+
+      it 'rejects the change and keeps the previous plan' do
+        expect { described_class.call(user: account, plan: User::PRO_PLAN) }
+          .to raise_error(ApiError::UnprocessableEntityError)
+
+        expect(account.reload.plan).to eq(User::FREE_PLAN)
       end
     end
 
