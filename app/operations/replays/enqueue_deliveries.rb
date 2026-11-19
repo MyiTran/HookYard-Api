@@ -7,10 +7,12 @@ module Replays
     end
 
     def call(run:)
-      return run unless claim(run)
-
-      enqueue_batches(run)
-      run.update!(materialized_at: Time.current)
+      run.with_lock do
+        if claimable?(run)
+          enqueue_batches(run)
+          run.update!(materialized_at: Time.current)
+        end
+      end
 
       run
     end
@@ -19,11 +21,8 @@ module Replays
 
     attr_reader :job
 
-    def claim(run)
-      run.with_lock do
-        run.reload
-        run.materialized_at.nil? && run.mode == ReplayRun::MODE_BULK
-      end
+    def claimable?(run)
+      run.materialized_at.nil? && run.mode == ReplayRun::MODE_BULK
     end
 
     def enqueue_batches(run)

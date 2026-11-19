@@ -13,12 +13,6 @@ class MessagesQuery < ApplicationQuery
       :event, :endpoint, :active_replay_item, :latest_replay_item, endpoint: :project
     )
 
-    apply_filters(scope, params)
-  end
-
-  private
-
-  def apply_filters(scope, params)
     scope = filter(scope, :by_search, params[:q])
     scope = filter(scope, :by_message_id, params[:message_id])
     scope = filter(scope, :by_request_id, params[:request_id])
@@ -32,6 +26,8 @@ class MessagesQuery < ApplicationQuery
 
     apply_order(scope, params[:order])
   end
+
+  private
 
   def by_search(scope, term)
     normalized = term.to_s.strip.delete_prefix('msg_')

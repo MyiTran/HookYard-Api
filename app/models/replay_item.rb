@@ -8,6 +8,7 @@
 #  error_message             :text
 #  error_type                :string
 #  hold_reason               :string
+#  quota_reserved_at         :datetime
 #  skip_reason               :string
 #  started_at                :datetime
 #  status                    :string           default("queued"), not null
@@ -66,6 +67,9 @@ class ReplayItem < ApplicationRecord
   MISSING_SECRET_ERROR_TYPE = 'ReplaySigningSecretMissing'
   MISSING_SECRET_MESSAGE = 'endpoint has no current signing secret'
 
+  LEASE_EXPIRED_ERROR_TYPE = 'ReplayLeaseExpired'
+  LEASE_EXPIRED_MESSAGE = 'replay delivery lease expired before the attempt completed'
+
   enum :status, STATUSES, default: :queued, validate: true
 
   belongs_to :replay_run
@@ -76,6 +80,9 @@ class ReplayItem < ApplicationRecord
   scope :active, -> { where(status: ACTIVE_STATUSES) }
   scope :with_active_lease, lambda { |at = Time.current|
     delivering.where(delivery_lease_expires_at: at..)
+  }
+  scope :with_expired_lease, lambda { |at = Time.current|
+    delivering.where(delivery_lease_expires_at: ...at)
   }
 
   validates :hold_reason, inclusion: { in: HOLD_REASONS }, allow_nil: true
@@ -88,12 +95,20 @@ class ReplayItem < ApplicationRecord
     ACTIVE_STATUSES.include?(status)
   end
 
+  def quota_reserved?
+    quota_reserved_at.present?
+  end
+
   def terminal?
     TERMINAL_STATUSES.include?(status)
   end
 
   def lease_active?(at = Time.current)
     delivery_lease_expires_at.present? && delivery_lease_expires_at > at
+  end
+
+  def lease_expired?(at = Time.current)
+    delivering? && delivery_lease_expires_at.present? && delivery_lease_expires_at <= at
   end
 
   def mark_queued!

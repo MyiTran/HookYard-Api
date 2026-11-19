@@ -58,7 +58,6 @@ class DeliveryAttempt < ApplicationRecord
   belongs_to :message
   belongs_to :replay_item, optional: true
 
-  scope :completed, -> { where('response_status IS NOT NULL OR error_type IS NOT NULL') }
   # Failure diagnosis must only see attempts the pipeline considers failed: a non-2xx
   # response or a terminal transport error (timeout, DNS, TLS, connection reset). A 2xx
   # delivery is a success and an attempt without terminal evidence is still in flight,

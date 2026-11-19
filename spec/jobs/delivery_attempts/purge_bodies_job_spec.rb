@@ -22,7 +22,8 @@ describe DeliveryAttempts::PurgeBodiesJob, type: :job do
       expect(schedule['purge_delivery_attempt_bodies']).to eq(
         'cron' => '30 2 * * *',
         'class' => 'DeliveryAttempts::PurgeBodiesJob',
-        'queue' => 'low'
+        'queue' => 'low',
+        'active_job' => true
       )
     end
   end

@@ -4,14 +4,16 @@ module Replays
     ACTIVE_MESSAGE_INDEX = 'index_replay_items_on_active_message'
 
     def call(run:, as_of: Time.current)
-      Replays::BulkPolicy.enforce!(project: run.project, filters: filters(run), as_of: as_of)
+      ApplicationRecord.transaction do
+        Replays::BulkPolicy.enforce!(project: run.project, filters: filters(run), as_of: as_of)
+        run.update!(requested_count: count_candidates(run, as_of))
 
-      run.update!(requested_count: count_candidates(run, as_of))
-      snapshot_batches(run, as_of)
+        inserted_ids = snapshot_batches(run, as_of)
+        enforce_inserted_cap!(inserted_ids.size)
+        reserve_quota_for_inserted!(run, inserted_ids)
 
-      enforce_inserted_cap!(run)
-
-      run
+        run
+      end
     end
 
     private
@@ -21,16 +23,19 @@ module Replays
     end
 
     def snapshot_batches(run, as_of)
+      inserted_ids = []
       cursor = nil
 
       loop do
         batch = scan(run, as_of, cursor)
         break if batch.empty?
 
-        insert_items(run, batch)
+        inserted_ids.concat(insert_items(run, batch))
         cursor = batch.last.id
         break if batch.size < BATCH_SIZE
       end
+
+      inserted_ids
     end
 
     def scan(run, as_of, cursor)
@@ -52,24 +57,31 @@ module Replays
       run.filters.symbolize_keys
     end
 
-    # A write that started before the confirmation cutoff can commit after the cap count
-    # ran, so the count alone can under-report. This second check runs before the caller's
-    # transaction commits, which rolls the whole run back instead of keeping an oversized set.
-    def enforce_inserted_cap!(run)
-      inserted = run.replay_items.count
+    # A write that started before the confirmation cutoff can commit after the eligible count
+    # ran, so the eligible count can under-report. This second check runs on the rows that were
+    # actually inserted and inside the same transaction, so an oversized run rolls back.
+    def enforce_inserted_cap!(inserted)
       return unless Replays::BulkPolicy.over_limit?(inserted)
 
       Replays::BulkPolicy.raise_limit_error!(eligible: inserted)
     end
 
-    def insert_items(run, messages)
-      now = Time.current
-      rows = messages.map { |message| item_attributes(run, message, now) }
+    def reserve_quota_for_inserted!(run, inserted_ids)
+      return if inserted_ids.empty?
 
-      ReplayItem.insert_all(rows, unique_by: ACTIVE_MESSAGE_INDEX)
+      at = Time.current
+      Plans::Quota.reserve_deliveries!(project: run.project, quantity: inserted_ids.size, at: at)
+      ReplayItem.where(id: inserted_ids).update_all(quota_reserved_at: at)
     end
 
-    def item_attributes(run, message, now)
+    def insert_items(run, messages)
+      rows = messages.map { |message| item_attributes(run, message) }
+
+      ReplayItem.insert_all(rows, unique_by: ACTIVE_MESSAGE_INDEX).rows.flatten
+    end
+
+    def item_attributes(run, message)
+      now = Time.current
       held = message.endpoint.circuit_open?
 
       {

@@ -35,10 +35,15 @@ describe 'Projects', type: :request do
 
         expect(response).to have_http_status(:payment_required)
         body = JSON.parse(response.body)
+        expect(body.keys).to contain_exactly('error', 'message', 'status', 'used', 'limit', 'errors')
         expect(body['error']).to eq('plan_limit_exceeded')
+        expect(body['message']).to eq('The free plan allows at most 2 projects')
+        expect(body['status']).to eq(402)
         expect(body['used']).to eq(2)
         expect(body['limit']).to eq(2)
-        expect(body['errors']).to contain_exactly(hash_including('field' => 'project_limit'))
+        expect(body['errors']).to contain_exactly(
+          hash_including('field' => 'project_limit', 'message' => 'The free plan allows at most 2 projects')
+        )
         expect(owner.owned_project_count).to eq(2)
       end
     end
@@ -149,6 +154,29 @@ describe 'Projects', type: :request do
       expect(response).to have_http_status(:unauthorized)
     end
 
+    context 'when a legacy project has no billing owner and no owner membership' do
+      let(:legacy) do
+        create(:project).tap do |created|
+          created.update_columns(billing_owner_id: nil)
+          create(:project_membership, project: created, user: maintainer, role: :maintainer)
+        end
+      end
+
+      it 'lists the project without crashing and renders safe plan fields' do
+        legacy
+
+        get '/api/v1/projects', headers: auth_headers(maintainer)
+
+        expect(response).to have_http_status(:ok)
+        entry = JSON.parse(response.body)['data'].first
+        expect(entry['plan']).to be_nil
+        expect(entry['endpoint_limit']).to be_nil
+        expect(entry['monthly_delivery_limit']).to be_nil
+        expect(entry['usage']['deliveries_this_period']).to eq(0)
+        expect(entry['usage']['deliveries_remaining']).to be_nil
+      end
+    end
+
     describe 'pagination' do
       it 'returns the first page with pagination metadata by default' do
         create_list(:project, 3, :with_owner, owner: maintainer)
@@ -227,10 +255,24 @@ describe 'Projects', type: :request do
 
       it 'serializes the plan usage of every page without extra queries per project' do
         project
-        UserUsagePeriod.reserve_deliveries(user: owner, quantity: 1, limit: 10_000)
+        UserUsagePeriod.reserve_deliveries!(user: owner, quantity: 1, limit: 10_000)
 
         single_queries = sql_queries { get '/api/v1/projects', headers: auth_headers(maintainer) }
         create_list(:project, 4, :with_owner, owner: maintainer)
+        many_queries = sql_queries { get '/api/v1/projects', headers: auth_headers(maintainer) }
+
+        expect(JSON.parse(response.body)['data'].size).to eq(5)
+        expect(many_queries.length).to eq(single_queries.length)
+      end
+
+      it 'serializes legacy projects without extra queries per project' do
+        create(:project, :with_owner, owner: maintainer).tap { |legacy| legacy.update_columns(billing_owner_id: nil) }
+
+        single_queries = sql_queries { get '/api/v1/projects', headers: auth_headers(maintainer) }
+
+        create_list(:project, 4, :with_owner, owner: maintainer).each do |legacy|
+          legacy.update_columns(billing_owner_id: nil)
+        end
         many_queries = sql_queries { get '/api/v1/projects', headers: auth_headers(maintainer) }
 
         expect(JSON.parse(response.body)['data'].size).to eq(5)
@@ -288,7 +330,7 @@ describe 'Projects', type: :request do
 
     it 'renders the plan limits and the metered usage of the current period' do
       create(:endpoint, project: project)
-      UserUsagePeriod.reserve_deliveries(user: owner, quantity: 4, limit: 10_000)
+      UserUsagePeriod.reserve_deliveries!(user: owner, quantity: 4, limit: 10_000)
 
       get "/api/v1/projects/#{project.id}", headers: auth_headers(maintainer)
 
@@ -303,6 +345,43 @@ describe 'Projects', type: :request do
       expect(body['usage']['period_ends_at']).to eq(UserUsagePeriod.period_ends_at.iso8601)
     end
 
+    it 'renders a legacy project from its owner membership plan' do
+      legacy = create(:project, :with_owner, owner: maintainer)
+      legacy.update_columns(billing_owner_id: nil)
+
+      get "/api/v1/projects/#{legacy.id}", headers: auth_headers(maintainer)
+
+      expect(response).to have_http_status(:ok)
+      body = JSON.parse(response.body)
+      expect(body['plan']).to eq(User::FREE_PLAN)
+      expect(body['endpoint_limit']).to eq(3)
+      expect(body['monthly_delivery_limit']).to eq(10_000)
+    end
+
+    context 'when a legacy project has no billing owner and no owner membership' do
+      let(:legacy) do
+        create(:project).tap do |created|
+          created.update_columns(billing_owner_id: nil)
+          create(:project_membership, project: created, user: maintainer, role: :maintainer)
+        end
+      end
+
+      it 'renders safely without a billing account' do
+        get "/api/v1/projects/#{legacy.id}", headers: auth_headers(maintainer)
+
+        expect(response).to have_http_status(:ok)
+        body = JSON.parse(response.body)
+        expect(body['plan']).to be_nil
+        expect(body['endpoint_limit']).to be_nil
+        expect(body['monthly_delivery_limit']).to be_nil
+        expect(body['usage']).to include(
+          'endpoint_count' => 0,
+          'deliveries_this_period' => 0,
+          'deliveries_remaining' => nil
+        )
+      end
+    end
+
     it 'does not advertise unimplemented capabilities as enabled features' do
       get "/api/v1/projects/#{project.id}", headers: auth_headers(maintainer)
 
@@ -314,7 +393,7 @@ describe 'Projects', type: :request do
     end
 
     it 'never reports a negative remaining usage' do
-      UserUsagePeriod.reserve_deliveries(
+      UserUsagePeriod.reserve_deliveries!(
         user: owner,
         quantity: Plans::Entitlements.monthly_delivery_limit(owner) + 5,
         limit: Plans::Entitlements.monthly_delivery_limit(owner) + 5
@@ -342,7 +421,7 @@ describe 'Projects', type: :request do
 
     it 'reports the metered usage of the billing account across its projects' do
       sibling_project = create(:project, :with_owner, owner: owner)
-      UserUsagePeriod.reserve_deliveries(user: owner, quantity: 6, limit: 10_000)
+      UserUsagePeriod.reserve_deliveries!(user: owner, quantity: 6, limit: 10_000)
 
       get "/api/v1/projects/#{sibling_project.id}", headers: auth_headers(owner)
 
