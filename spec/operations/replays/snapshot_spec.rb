@@ -75,6 +75,32 @@ describe Replays::Snapshot, type: :operation do
       expect(run.replay_items.count).to eq(1)
     end
 
+    context 'when a failed message has no terminal timestamp' do
+      it 'snapshots the same message that Preview reports as eligible' do
+        message = create(:message, project: project, endpoint: endpoint, status: :failed)
+
+        preview = Replays::Preview.call(project: project, filters: {})
+        expect(preview.eligible_count).to eq(1)
+        expect(preview.requested_count).to eq(1)
+
+        described_class.call(run: run, as_of: as_of)
+
+        expect(run.reload.requested_count).to eq(1)
+        expect(run.replay_items.pluck(:message_id)).to contain_exactly(message.id)
+      end
+    end
+
+    context 'when no failed messages match the run' do
+      it 'completes with zero requested count and no items' do
+        create(:message, project: project, endpoint: endpoint, status: :pending)
+
+        described_class.call(run: run, as_of: as_of)
+
+        expect(run.reload.requested_count).to eq(0)
+        expect(run.replay_items).to be_empty
+      end
+    end
+
     context 'when the eligible count exceeds the limit' do
       before { stub_const('Replays::BulkPolicy::MAX_ITEMS_PER_RUN', 2) }
 
