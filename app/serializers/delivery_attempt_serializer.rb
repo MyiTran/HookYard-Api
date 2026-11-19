@@ -8,6 +8,14 @@ class DeliveryAttemptSerializer < ApplicationSerializer
     attempt.failure_category
   end
 
+  field :attempt_kind do |attempt|
+    attempt.replay? ? 'replay' : 'automatic'
+  end
+
+  field :replay_item_id do |attempt|
+    attempt.replay_item_id
+  end
+
   field :request_body do |attempt|
     Webhooks::EvidenceSanitizer.sanitize_body(attempt.request_body)
   end

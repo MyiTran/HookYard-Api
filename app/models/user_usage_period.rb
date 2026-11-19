@@ -11,6 +11,7 @@
 #
 # Indexes
 #
+#  index_user_usage_periods_on_user_id                       (user_id)
 #  index_user_usage_periods_on_user_id_and_period_starts_on  (user_id,period_starts_on) UNIQUE
 #
 # Foreign Keys

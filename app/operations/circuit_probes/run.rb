@@ -171,6 +171,7 @@ module CircuitProbes
       end
 
       Messages::ReleaseHeld.call(endpoint: endpoint) if closed_circuit
+      Replays::ReleaseHeld.call(endpoint: endpoint) if closed_circuit
     end
 
     def owns_lease?(claim)

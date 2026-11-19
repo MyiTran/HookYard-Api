@@ -591,4 +591,55 @@ describe 'Messages', type: :request do
       )
     end
   end
+
+  describe 'POST /api/v1/messages/:id/replay' do
+    it 'replays a terminally failed message for a member' do
+      message = create(:message, event: event, endpoint: endpoint, status: :failed, terminal_at: Time.current)
+
+      post "/api/v1/messages/#{message.id}/replay", headers: auth_headers(user)
+
+      expect(response).to have_http_status(:accepted)
+      body = JSON.parse(response.body)
+      expect(body['mode']).to eq(ReplayRun::MODE_SINGLE)
+      expect(body['items'].map { |item| item['message_id'] }).to contain_exactly(message.id)
+    end
+
+    it 'rejects a message that is not terminally failed' do
+      message = create(:message, event: event, endpoint: endpoint)
+
+      post "/api/v1/messages/#{message.id}/replay", headers: auth_headers(user)
+
+      expect(response).to have_http_status(:unprocessable_entity)
+    end
+
+    it 'rejects a replay that would exceed the monthly delivery limit' do
+      message = create(:message, event: event, endpoint: endpoint, status: :failed, terminal_at: Time.current)
+      account = project.effective_billing_owner
+      limit = Plans::Entitlements.monthly_delivery_limit(account)
+      UserUsagePeriod.reserve_deliveries!(user: account, quantity: limit, limit: limit)
+
+      post "/api/v1/messages/#{message.id}/replay", headers: auth_headers(user)
+
+      expect(response).to have_http_status(:payment_required)
+      body = JSON.parse(response.body)
+      expect(body['error']).to eq('plan_limit_exceeded')
+      expect(body['status']).to eq(402)
+    end
+
+    it 'does not expose a message of another project' do
+      other_message = create(:message, status: :failed, terminal_at: Time.current)
+
+      post "/api/v1/messages/#{other_message.id}/replay", headers: auth_headers(user)
+
+      expect(response).to have_http_status(:not_found)
+    end
+
+    it 'never exposes the endpoint signing secret' do
+      message = create(:message, event: event, endpoint: endpoint, status: :failed, terminal_at: Time.current)
+
+      post "/api/v1/messages/#{message.id}/replay", headers: auth_headers(user)
+
+      expect(response.body).not_to include(endpoint.current_signing_secret.secret)
+    end
+  end
 end

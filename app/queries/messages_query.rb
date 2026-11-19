@@ -9,7 +9,9 @@ class MessagesQuery < ApplicationQuery
   DEFAULT_ORDER = 'created_desc'
 
   def call(scope = Message.none, **params)
-    scope = with_attempt_summary(scope).preload(:event, :endpoint, endpoint: :project)
+    scope = with_attempt_summary(scope).preload(
+      :event, :endpoint, :active_replay_item, :latest_replay_item, endpoint: :project
+    )
 
     scope = filter(scope, :by_search, params[:q])
     scope = filter(scope, :by_message_id, params[:message_id])

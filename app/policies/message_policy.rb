@@ -3,6 +3,10 @@ class MessagePolicy < ApplicationPolicy
     member?
   end
 
+  def replay?
+    member?
+  end
+
   class Scope < ApplicationPolicy::Scope
     def resolve
       user ? scope.where(event_id: Event.where(project_id: user.projects).select(:id)) : scope.none

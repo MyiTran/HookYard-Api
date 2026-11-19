@@ -17,6 +17,7 @@ module Endpoints
       end
 
       Messages::ReleaseHeld.call(endpoint: endpoint) if recovered
+      Replays::ReleaseHeld.call(endpoint: endpoint) if recovered
       endpoint
     end
 
