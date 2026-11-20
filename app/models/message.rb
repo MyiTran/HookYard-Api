@@ -108,6 +108,8 @@ class Message < ApplicationRecord
   end
 
   def failure_category
+    return nil if DeliveryAttempt::RESPONSE_SUCCESS_STATUSES.cover?(last_response_status)
+
     Webhooks::FailureCategory.for(error_type: last_error_type, response_status: last_response_status)
   end
 

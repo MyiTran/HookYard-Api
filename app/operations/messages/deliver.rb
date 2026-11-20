@@ -235,6 +235,8 @@ module Messages
         )
       end
 
+      DeliveryMetric.record_attempt!(attempt)
+
       transition_after_result!(result)
     end
 

@@ -9,6 +9,7 @@
 #  error_message          :text
 #  error_type             :string
 #  http_method            :string           default("POST"), not null
+#  metrics_recorded_at    :datetime
 #  request_body           :text
 #  request_headers        :jsonb            not null
 #  request_url            :text             not null
@@ -32,6 +33,7 @@
 #  index_delivery_attempts_on_message_id_and_created_at      (message_id,created_at)
 #  index_delivery_attempts_on_replay_item_id                 (replay_item_id) UNIQUE
 #  index_delivery_attempts_on_request_id                     (request_id)
+#  index_delivery_attempts_on_unrecorded_metrics             (id) WHERE (metrics_recorded_at IS NULL)
 #
 # Foreign Keys
 #
@@ -86,11 +88,11 @@ class DeliveryAttempt < ApplicationRecord
   end
 
   def transport_failed?
-    error_type.present?
+    error_type.to_s.strip.present?
   end
 
   def completed?
-    response_status.present? || error_type.present?
+    response_status.present? || transport_failed?
   end
 
   def replay?

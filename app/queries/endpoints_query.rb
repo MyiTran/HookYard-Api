@@ -12,6 +12,7 @@ class EndpointsQuery < ApplicationQuery
     scope = filter(scope, :by_search, params[:q])
     scope = filter(scope, :by_project, params[:project_id])
     scope = filter(scope, :by_active, params[:active])
+    scope = filter(scope, :by_circuit_state, params[:circuit_state])
 
     apply_order(scope, params[:order])
   end
@@ -19,7 +20,9 @@ class EndpointsQuery < ApplicationQuery
   private
 
   def by_archived(scope, archived)
-    ActiveModel::Type::Boolean.new.cast(archived) ? scope.archived : scope.not_archived
+    return scope.not_archived if archived.blank?
+
+    boolean_scope(scope, archived, true_scope: :archived, false_scope: :not_archived)
   end
 
   def by_search(scope, term)
@@ -27,11 +30,36 @@ class EndpointsQuery < ApplicationQuery
   end
 
   def by_project(scope, project_id)
+    return scope.none unless valid_uuid?(project_id)
+
     scope.where(project_id: project_id)
   end
 
   def by_active(scope, active)
-    scope.where(active: ActiveModel::Type::Boolean.new.cast(active))
+    parsed = boolean_value(active)
+    return scope.none if parsed.nil?
+
+    scope.where(active: parsed)
+  end
+
+  def by_circuit_state(scope, state)
+    return scope.none unless Endpoint.circuit_states.key?(state.to_s)
+
+    scope.where(circuit_state: state.to_s)
+  end
+
+  def boolean_scope(scope, value, true_scope:, false_scope:)
+    parsed = boolean_value(value)
+    return scope.none if parsed.nil?
+
+    scope.public_send(parsed ? true_scope : false_scope)
+  end
+
+  def boolean_value(value)
+    case value
+    when true, 'true', '1', 1 then true
+    when false, 'false', '0', 0 then false
+    end
   end
 
   def apply_order(scope, value)

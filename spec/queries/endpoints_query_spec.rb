@@ -56,6 +56,10 @@ describe EndpointsQuery do
     it 'returns only endpoints of the given project' do
       expect(run(project_id: owned.id)).to contain_exactly(owned_endpoint)
     end
+
+    it 'returns no endpoints for an invalid project id' do
+      expect(run(project_id: 'not-a-uuid')).to be_empty
+    end
   end
 
   describe 'active filter' do
@@ -65,6 +69,22 @@ describe EndpointsQuery do
 
     it 'returns only inactive endpoints' do
       expect(run(active: 'false')).to contain_exactly(maintained_endpoint)
+    end
+
+    it 'returns no endpoints for an invalid boolean' do
+      expect(run(active: 'sometimes')).to be_empty
+    end
+  end
+
+  describe 'circuit state filter' do
+    it 'returns only endpoints in the requested circuit state' do
+      owned_endpoint.update_columns(circuit_state: 'circuit_open')
+
+      expect(run(circuit_state: 'circuit_open')).to contain_exactly(owned_endpoint)
+    end
+
+    it 'returns no endpoints for an unsupported circuit state' do
+      expect(run(circuit_state: 'melted')).to be_empty
     end
   end
 
