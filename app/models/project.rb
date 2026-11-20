@@ -6,13 +6,18 @@
 #  delivery_retry_delays_seconds :integer          is an Array
 #  delivery_timeout_seconds      :integer
 #  name                          :string           not null
+#  plan                          :string           default("free"), not null
 #  created_at                    :datetime         not null
 #  updated_at                    :datetime         not null
-#  billing_owner_id              :uuid
+#  billing_owner_id              :uuid             not null
 #
 # Indexes
 #
 #  index_projects_on_billing_owner_id  (billing_owner_id)
+#
+# Foreign Keys
+#
+#  fk_rails_...  (billing_owner_id => users.id) ON DELETE => restrict
 #
 class Project < ApplicationRecord
   MAX_RETRY_DELAY_SLOTS = Webhooks::DeliveryPolicy::RETRY_DELAYS.size

@@ -33,6 +33,7 @@
 #  index_delivery_attempts_on_message_id_and_created_at      (message_id,created_at)
 #  index_delivery_attempts_on_replay_item_id                 (replay_item_id) UNIQUE
 #  index_delivery_attempts_on_request_id                     (request_id)
+#  index_delivery_attempts_on_unrecorded_metrics             (id) WHERE (metrics_recorded_at IS NULL)
 #
 # Foreign Keys
 #
