@@ -4,15 +4,18 @@ module Api
       class GoogleSessionsController < Devise::SessionsController
         respond_to :json
 
-        rate_limit to: 20,
-                   within: 1.minute,
+        RATE_LIMIT = 20
+        RATE_LIMIT_WINDOW = 1.minute
+
+        rate_limit to: RATE_LIMIT,
+                   within: RATE_LIMIT_WINDOW,
                    only: :create,
                    name: 'google-authentication',
                    store: Rails.application.config.x.google_authentication.rate_limit_store,
-                   with: -> { render_api_error(ApiError::GoogleAuthenticationError.new(status: 429, code: 'google_authentication_rate_limited')) }
+                   with: -> { render_api_error(ApiError::GoogleAuthenticationRateLimitError.new(retry_after: RATE_LIMIT_WINDOW.to_i)) }
 
         def create
-          claims = google_token_verifier.verify(params.require(:credential))
+          claims = google_token_verifier.verify(params[:credential])
           user = Authentication::GoogleSignIn.call(claims:)
           sign_in(:user, user)
           render_resource(user)

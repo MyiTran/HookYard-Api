@@ -56,19 +56,60 @@ describe 'Google sessions', type: :request do
       )
     end
 
-    it 'returns bad request when the credential is missing' do
+    it 'returns the stable missing credential contract when the credential is omitted' do
+      allow(verifier).to receive(:verify).with(nil).and_raise(
+        ApiError::GoogleAuthenticationError.new(status: 400, code: 'google_credential_missing')
+      )
+
       post '/api/v1/auth/google', params: {}, as: :json
 
       expect(response).to have_http_status(:bad_request)
+      expect(json_response).to include(
+        'code' => 'google_credential_missing',
+        'message' => 'Google authentication could not be verified'
+      )
     end
 
-    it 'rate limits repeated requests from the same IP address' do
-      20.times { post '/api/v1/auth/google', params: { credential: 'google-id-token' }, as: :json }
+    it 'returns the stable missing credential contract when the credential is blank' do
+      allow(verifier).to receive(:verify).with(' ').and_raise(
+        ApiError::GoogleAuthenticationError.new(status: 400, code: 'google_credential_missing')
+      )
 
-      post '/api/v1/auth/google', params: { credential: 'google-id-token' }, as: :json
+      post '/api/v1/auth/google', params: { credential: ' ' }, as: :json
 
-      expect(response).to have_http_status(:too_many_requests)
-      expect(json_response).to include('code' => 'google_authentication_rate_limited')
+      expect(response).to have_http_status(:bad_request)
+      expect(json_response).to include(
+        'code' => 'google_credential_missing',
+        'message' => 'Google authentication could not be verified'
+      )
+    end
+
+    context 'when rate limited' do
+      let(:rate_limit_store) { Rails.application.config.x.google_authentication.rate_limit_store }
+      let(:rate_limit_headers) { { 'REMOTE_ADDR' => '203.0.113.201' } }
+
+      around do |example|
+        rate_limit_store.clear
+        example.run
+      ensure
+        rate_limit_store.clear
+      end
+
+      it 'returns a retry contract after twenty requests from the same IP address' do
+        20.times do
+          post '/api/v1/auth/google', params: { credential: 'google-id-token' }, headers: rate_limit_headers, as: :json
+
+          expect(response).not_to have_http_status(:too_many_requests)
+        end
+
+        post '/api/v1/auth/google', params: { credential: 'google-id-token' }, headers: rate_limit_headers, as: :json
+
+        expect(response).to have_http_status(:too_many_requests)
+        expect(json_response).to include('code' => 'google_authentication_rate_limited')
+        expect(json_response['retry_after']).to be_a(Integer)
+        expect(json_response['retry_after']).to be_positive
+        expect(response.headers['Retry-After']).to eq(json_response['retry_after'].to_s)
+      end
     end
   end
 end

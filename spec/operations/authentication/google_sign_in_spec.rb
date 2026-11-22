@@ -31,6 +31,14 @@ describe Authentication::GoogleSignIn do
       expect(user.user_identities.find_by!(provider: UserIdentity::GOOGLE_PROVIDER).uid).to eq(claims['sub'])
     end
 
+    it 'links the existing confirmed account after email normalization' do
+      user = create(:user, email: 'Existing@Example.com')
+
+      described_class.call(claims: claims.merge('email' => ' EXISTING@example.com '))
+
+      expect(user.user_identities.find_by!(provider: UserIdentity::GOOGLE_PROVIDER).uid).to eq(claims['sub'])
+    end
+
     it 'does not change an existing account role or plan while linking' do
       user = create(:user, :pro, email: claims['email'])
       user.add_role(:admin)
