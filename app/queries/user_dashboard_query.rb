@@ -71,7 +71,7 @@ class UserDashboardQuery < ApplicationQuery
       in_flight: delivering + pending_not_held,
       held: held,
       retries_due: retries_due,
-      success_rate: total.positive? ? (succeeded.to_f / total * 100).round(2) : nil
+      success_rate: total.positive? ? (succeeded.to_f / total * 100).round(2) : 0.0
     }
   end
 
@@ -103,6 +103,8 @@ class UserDashboardQuery < ApplicationQuery
   end
 
   def endpoint_aggregates(project_ids)
+    return [{}, {}, {}, 0] if project_ids.empty?
+
     endpoints = Endpoint.where(project_id: project_ids)
 
     [
@@ -114,6 +116,8 @@ class UserDashboardQuery < ApplicationQuery
   end
 
   def message_aggregates(project_ids, at)
+    return [0, 0, 0, 0, {}, {}] if project_ids.empty?
+
     messages = Message.joins(:endpoint).where(endpoints: { project_id: project_ids })
 
     [
@@ -127,17 +131,23 @@ class UserDashboardQuery < ApplicationQuery
   end
 
   def delivery_metric_aggregates(project_ids, at)
+    return [empty_delivery_totals, {}] if project_ids.empty?
+
     metrics = DeliveryMetric.where(project_id: project_ids).where(day: period_start(at)..period_end(at))
     totals = metrics.pick(
       Arel.sql('COALESCE(SUM(attempts_count), 0)'),
       Arel.sql('COALESCE(SUM(successes_count), 0)'),
       Arel.sql('COALESCE(SUM(failures_count), 0)')
-    )
+    ) || [0, 0, 0]
 
     [
       { total: totals[0].to_i, succeeded: totals[1].to_i, failed: totals[2].to_i },
       metrics.group(:project_id).sum(:failures_count)
     ]
+  end
+
+  def empty_delivery_totals
+    { total: 0, succeeded: 0, failed: 0 }
   end
 
   def period_start(at)

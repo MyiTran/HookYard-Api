@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_11_10_100004) do
+ActiveRecord::Schema[8.0].define(version: 2026_11_22_000000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pgcrypto"
@@ -403,6 +403,18 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_10_100004) do
     t.index ["resource_type", "resource_id"], name: "index_roles_on_resource"
   end
 
+  create_table "user_identities", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
+    t.uuid "user_id", null: false
+    t.string "provider", null: false
+    t.string "uid", null: false
+    t.string "email_at_provider", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["provider", "uid"], name: "index_user_identities_on_provider_and_uid", unique: true
+    t.index ["user_id", "provider"], name: "index_user_identities_on_user_id_and_provider", unique: true
+    t.index ["user_id"], name: "index_user_identities_on_user_id"
+  end
+
   create_table "user_usage_periods", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
     t.uuid "user_id", null: false
     t.date "period_starts_on", null: false
@@ -484,5 +496,6 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_10_100004) do
   add_foreign_key "replay_items", "replay_runs", on_delete: :cascade
   add_foreign_key "replay_runs", "projects", on_delete: :cascade
   add_foreign_key "replay_runs", "users", column: "actor_id"
+  add_foreign_key "user_identities", "users", on_delete: :cascade
   add_foreign_key "user_usage_periods", "users", on_delete: :cascade
 end
