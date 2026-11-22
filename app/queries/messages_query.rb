@@ -11,8 +11,17 @@ class MessagesQuery < ApplicationQuery
 
   DEFAULT_ORDER = 'created_desc'
 
+  class << self
+    def preload_associations(preload_replay_items:, preload_endpoint_context: true)
+      associations = [:event]
+      associations.concat([:endpoint, { endpoint: :project }]) if preload_endpoint_context
+      associations.concat(%i[active_replay_item latest_replay_item]) if preload_replay_items
+      associations
+    end
+  end
+
   def call(scope = Message.none, preload_replay_items: true, **params)
-    scope = with_attempt_summary(scope).preload(*preload_associations(preload_replay_items))
+    scope = with_attempt_summary(scope).preload(*self.class.preload_associations(preload_replay_items:))
 
     scope = filter(scope, :by_search, params[:q])
     scope = filter(scope, :by_message_id, params[:message_id])
@@ -30,12 +39,6 @@ class MessagesQuery < ApplicationQuery
   end
 
   private
-
-  def preload_associations(preload_replay_items)
-    associations = [:event, :endpoint, { endpoint: :project }]
-    associations.concat(%i[active_replay_item latest_replay_item]) if preload_replay_items
-    associations
-  end
 
   def by_search(scope, term)
     normalized = term.to_s.strip.delete_prefix('msg_')

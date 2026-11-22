@@ -24,7 +24,7 @@ describe 'Projects::Messages', type: :request do
       next if payload[:cached]
 
       sql = payload[:sql]
-      queries << sql if sql.match?(/FROM "messages"|FROM "delivery_attempts"|FROM "events"/)
+      queries << sql if sql.match?(/FROM "messages"|FROM "delivery_attempts"|FROM "events"|FROM "replay_items"/)
     end
 
     yield
@@ -141,18 +141,50 @@ describe 'Projects::Messages', type: :request do
     end
 
     it 'keeps the number of payload queries bounded' do
-      3.times do
-        message = create(:message, event: create(:event, project: project), endpoint: endpoint)
-        create(:delivery_attempt, message: message, attempt_number: 1, response_status: 200)
-        create(:delivery_attempt, message: message, attempt_number: 2, response_status: 500)
+      create(:message, event: event, endpoint: endpoint)
+
+      baseline = payload_query_count do
+        get endpoint_messages_path(project.id, endpoint.id), headers: auth_headers(maintainer)
       end
+
+      24.times { create(:message, event: create(:event, project: project), endpoint: endpoint) }
 
       query_count = payload_query_count do
         get endpoint_messages_path(project.id, endpoint.id), headers: auth_headers(maintainer)
       end
 
       expect(response).to have_http_status(:ok)
-      expect(query_count).to be <= 4
+      expect(baseline).to eq(5)
+      expect(query_count).to eq(baseline)
+    end
+
+    it 'serializes replay state without changing page metadata or order' do
+      no_replay = create(:message, event: event, endpoint: endpoint, created_at: 3.hours.ago)
+      completed = create(:message, event: create(:event, project: project), endpoint: endpoint,
+                                   status: :failed, terminal_at: 2.hours.ago, created_at: 2.hours.ago)
+      active = create(:message, event: create(:event, project: project), endpoint: endpoint,
+                                status: :failed, terminal_at: 1.hour.ago, created_at: 1.hour.ago)
+      completed_run = create(:replay_run, project: project, actor: maintainer)
+      create(:replay_item, replay_run: completed_run, message: completed, endpoint: endpoint,
+                           status: :succeeded, completed_at: 1.hour.ago)
+      active_run = create(:replay_run, project: project, actor: maintainer)
+      create(:replay_item, replay_run: active_run, message: active, endpoint: endpoint, status: :queued)
+
+      get endpoint_messages_path(project.id, endpoint.id),
+          params: { page: { size: 2 } }, headers: auth_headers(maintainer)
+
+      body = JSON.parse(response.body)
+      entries = body['data'].index_by { |entry| entry['id'] }
+
+      expect(body['meta']).to include('total_count' => 3, 'page_size' => 2)
+      expect(body['data'].map { |entry| entry['id'] }).to eq([active.id, completed.id])
+      expect(entries.fetch(active.id)['replay']).to include('allowed' => false, 'blocked_reason' => 'replay_in_progress', 'active' => true)
+      expect(entries.fetch(completed.id)['replay']).to include('allowed' => true, 'blocked_reason' => nil, 'active' => false)
+
+      get endpoint_messages_path(project.id, endpoint.id),
+          params: { page: { number: 2, size: 2 } }, headers: auth_headers(maintainer)
+
+      expect(JSON.parse(response.body)['data'].map { |entry| entry['id'] }).to eq([no_replay.id])
     end
   end
 

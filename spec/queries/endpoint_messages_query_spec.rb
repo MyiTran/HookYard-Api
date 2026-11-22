@@ -65,5 +65,23 @@ describe EndpointMessagesQuery do
 
       expect(results.first.association(:event)).to be_loaded
     end
+
+    it 'preloads replay state for every message' do
+      no_replay = create(:message, event: event, endpoint: endpoint)
+      completed_replay = create(:message, event: create(:event, project: project), endpoint: endpoint)
+      active_replay = create(:message, event: create(:event, project: project), endpoint: endpoint)
+      create(:replay_item, message: completed_replay, endpoint: endpoint, status: :succeeded)
+      create(:replay_item, message: active_replay, endpoint: endpoint, status: :queued)
+
+      relation = described_class.call(endpoint.messages)
+      rows = relation.to_a
+
+      expect(rows.map(&:id)).to contain_exactly(no_replay.id, completed_replay.id, active_replay.id)
+      expect(rows.map { |row| row.association(:event).loaded? }).to all(be(true))
+      expect(rows.map { |row| row.association(:active_replay_item).loaded? }).to all(be(true))
+      expect(rows.map { |row| row.association(:latest_replay_item).loaded? }).to all(be(true))
+      expect(relation.preload_values).to include(:event, :active_replay_item, :latest_replay_item)
+      expect(relation.preload_values).not_to include(:endpoint, endpoint: :project)
+    end
   end
 end
