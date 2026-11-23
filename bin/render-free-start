@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+export WEB_CONCURRENCY="${WEB_CONCURRENCY:-1}"
+export RAILS_MAX_THREADS="${RAILS_MAX_THREADS:-3}"
+export RAILS_MIN_THREADS="${RAILS_MIN_THREADS:-3}"
+export SIDEKIQ_CONCURRENCY="${SIDEKIQ_CONCURRENCY:-2}"
+
+puma_pid=''
+sidekiq_pid=''
+
+shutdown() {
+  local status="${1:-0}"
+
+  trap - TERM INT
+
+  for pid in "$puma_pid" "$sidekiq_pid"; do
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      kill -TERM "$pid" 2>/dev/null || true
+    fi
+  done
+
+  wait "$puma_pid" 2>/dev/null || true
+  wait "$sidekiq_pid" 2>/dev/null || true
+
+  exit "$status"
+}
+
+trap shutdown TERM INT
+
+exec bundle exec puma &
+puma_pid=$!
+
+exec bundle exec sidekiq &
+sidekiq_pid=$!
+
+set +e
+wait -n "$puma_pid" "$sidekiq_pid"
+status=$?
+set -e
+
+if [ "$status" -eq 0 ]; then
+  status=1
+fi
+
+shutdown "$status"

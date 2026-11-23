@@ -1,6 +1,6 @@
 ---
 :verbose: false
-:concurrency: <%= ENV.fetch('RAILS_MAX_THREADS', 5) %>
+:concurrency: <%= ENV.fetch('SIDEKIQ_CONCURRENCY', ENV.fetch('RAILS_MAX_THREADS', 5)) %>
 :timeout: 25
 
 :queues:
