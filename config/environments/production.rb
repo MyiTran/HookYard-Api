@@ -1,4 +1,5 @@
 require 'active_support/core_ext/integer/time'
+require Rails.root.join('lib/active_storage_configuration')
 
 Rails.application.configure do
   # Settings specified here will take precedence over those in config/application.rb.
@@ -18,9 +19,6 @@ Rails.application.configure do
   # Enable serving of images, stylesheets, and JavaScripts from an asset server.
   # config.asset_host = 'http://assets.example.com'
 
-  # Store uploaded files on the aws s3 (see config/storage.yml for options).
-  config.active_storage.service = :amazon
-
   # Assume all access to the app is happening through a SSL-terminating reverse proxy.
   config.assume_ssl = true
 
@@ -33,6 +31,8 @@ Rails.application.configure do
   # Log to STDOUT with the current request id as a default log tag.
   config.log_tags = [:request_id]
   config.logger   = ActiveSupport::TaggedLogging.logger(STDOUT)
+
+  ActiveStorageConfiguration.configure!(config: config.active_storage, env: ENV, logger: config.logger)
 
   # Change to 'debug' to log everything (including potentially personally-identifiable information!)
   config.log_level = ENV.fetch('RAILS_LOG_LEVEL', 'info')
