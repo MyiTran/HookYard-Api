@@ -1,3 +1,5 @@
+require 'rails_helper'
+
 describe EndpointPolicy, type: :policy do
   subject { described_class.new(user, endpoint) }
 

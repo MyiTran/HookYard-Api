@@ -514,7 +514,7 @@ describe Events::Ingest, type: :operation do
       before do
         create(:project_membership, project: project, user: pro_member, role: :maintainer)
         limit = Plans::Entitlements.monthly_delivery_limit(account)
-        UserUsagePeriod.reserve_deliveries(user: account, quantity: limit, limit: limit)
+        UserUsagePeriod.reserve_deliveries!(user: account, quantity: limit, limit: limit)
       end
 
       it 'uses the billing owner free quota rather than the member plan' do
@@ -531,7 +531,7 @@ describe Events::Ingest, type: :operation do
       before do
         create(:project_membership, project: project, user: admin_member, role: :maintainer)
         limit = Plans::Entitlements.monthly_delivery_limit(account)
-        UserUsagePeriod.reserve_deliveries(user: account, quantity: limit, limit: limit)
+        UserUsagePeriod.reserve_deliveries!(user: account, quantity: limit, limit: limit)
       end
 
       it 'does not grant admin entitlement to the customer project quota' do
