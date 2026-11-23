@@ -1,3 +1,5 @@
+require 'rails_helper'
+
 describe Blobs::Create, type: :operation do
   subject { described_class.new }
 
