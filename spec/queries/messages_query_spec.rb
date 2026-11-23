@@ -214,10 +214,13 @@ describe MessagesQuery do
   end
 
   describe 'failure category filter' do
+    let(:failed_message) { new_message }
+    let(:succeeded_message) { new_message(status: :succeeded, terminal_at: Time.current) }
+
     it 'filters messages by the failure category of their latest attempt' do
       create(:delivery_attempt, message: failed_message, attempt_number: 1, error_type: 'Net::ReadTimeout')
 
-      expect(run(failure_category: Webhooks::FailureCategory::TIMEOUT)).to contain_exactly(failed_message)
+      expect(results(failure_category: Webhooks::FailureCategory::TIMEOUT)).to contain_exactly(failed_message)
     end
 
     it 'classifies the latest attempt only' do
@@ -225,18 +228,20 @@ describe MessagesQuery do
       create(:delivery_attempt, message: retried_message, attempt_number: 1, error_type: 'Net::ReadTimeout')
       create(:delivery_attempt, message: retried_message, attempt_number: 2, response_status: 500)
 
-      expect(run(failure_category: Webhooks::FailureCategory::HTTP_ERROR)).to contain_exactly(retried_message)
-      expect(run(failure_category: Webhooks::FailureCategory::TIMEOUT)).to be_empty
+      expect(results(failure_category: Webhooks::FailureCategory::HTTP_ERROR)).to contain_exactly(retried_message)
+      expect(results(failure_category: Webhooks::FailureCategory::TIMEOUT)).to be_empty
     end
 
     it 'never classifies a successful delivery as a failure' do
       create(:delivery_attempt, message: succeeded_message, attempt_number: 1, response_status: 200)
 
-      expect(run(failure_category: Webhooks::FailureCategory::HTTP_ERROR)).to be_empty
+      expect(results(failure_category: Webhooks::FailureCategory::HTTP_ERROR)).to be_empty
     end
 
     it 'ignores an unknown category' do
-      expect(run(failure_category: 'made_up').count(:all)).to eq(7)
+      message = new_message
+
+      expect(results(failure_category: 'made_up')).to contain_exactly(message)
     end
   end
 
