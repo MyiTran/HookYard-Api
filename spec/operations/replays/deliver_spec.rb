@@ -127,6 +127,33 @@ describe Replays::Deliver, type: :operation do
 
       expect(account.deliveries_used_in_period).to eq(1)
     end
+
+    context 'when the claimed lease has sub-microsecond precision' do
+      let(:nanosecond_now) { Time.zone.local(2026, 11, 25, 9, 43, 9) + Rational(384_552_123, 1_000_000_000) }
+
+      it 'keeps ownership of the replay item for a successful result' do
+        travel_to(nanosecond_now, with_usec: true) do
+          expect(Time.current.nsec).to eq(384_552_123)
+
+          deliver(http_result(status: 200))
+
+          expect(item.reload.status).to eq(ReplayItem::SUCCEEDED_STATUS)
+          expect(item.delivery_lease_expires_at).to be_nil
+          expect(message.reload.status).to eq('succeeded')
+          expect(message.delivery_attempts.sole.response_status).to eq(200)
+        end
+      end
+
+      it 'keeps ownership of the replay item for a circuit-counted failure' do
+        travel_to(nanosecond_now, with_usec: true) do
+          deliver(http_result(status: 503))
+
+          expect(item.reload.status).to eq(ReplayItem::FAILED_STATUS)
+          expect(message.reload.status).to eq('failed')
+          expect(endpoint.reload.circuit_failure_count).to eq(1)
+        end
+      end
+    end
   end
 
   describe 'claim guards' do

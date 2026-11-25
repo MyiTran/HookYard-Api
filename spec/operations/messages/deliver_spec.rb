@@ -560,6 +560,23 @@ describe Messages::Deliver, type: :operation do
       expect(message.reload.status).to eq('succeeded')
     end
 
+    it 'releases the capacity slot once the delivery finishes' do
+      2.times { create_active_delivery(endpoint) }
+      allow(http_client).to receive(:post).and_return(http_result(status: 500))
+
+      operation.call(message: message)
+
+      expect(message.reload.delivery_lease_expires_at).to be_nil
+      expect(endpoint.messages.with_active_lease.count).to eq(2)
+
+      next_message = create(:message, project: project, endpoint: endpoint)
+      allow(http_client).to receive(:post).and_return(http_result(status: 200))
+
+      described_class.new(http_client: http_client, signer: signer).call(message: next_message)
+
+      expect(next_message.reload.status).to eq('succeeded')
+    end
+
     it 'delivers concurrently on a different endpoint' do
       other_endpoint = create(:endpoint, project: project)
       3.times { create_active_delivery(other_endpoint) }
@@ -682,6 +699,65 @@ describe Messages::Deliver, type: :operation do
     end
   end
 
+  describe 'lease ownership at nanosecond precision' do
+    let(:nanosecond_now) { Time.zone.local(2026, 11, 25, 9, 43, 9) + Rational(384_552_123, 1_000_000_000) }
+
+    it 'keeps ownership when the claimed lease cannot be stored below microsecond precision' do
+      travel_to(nanosecond_now, with_usec: true) do
+        expect(Time.current.nsec).to eq(384_552_123)
+        allow(http_client).to receive(:post) do
+          expect(message.reload.delivery_lease_expires_at.nsec).to eq(384_552_000)
+          http_result(status: 200)
+        end
+
+        operation.call(message: message)
+
+        expect(message.reload.status).to eq('succeeded')
+        expect(message.delivery_attempts.sole.response_status).to eq(200)
+        expect(message.delivery_attempts.sole.metrics_recorded_at).to be_present
+      end
+    end
+
+    it 'finalizes an HTTP 500 with evidence, retry schedule and circuit failure' do
+      travel_to(nanosecond_now, with_usec: true) do
+        expect { deliver(http_result(status: 500)) }.to have_enqueued_job(Messages::DeliverJob)
+
+        attempt = message.reload.delivery_attempts.sole
+        expect(attempt.response_status).to eq(500)
+        expect(attempt.metrics_recorded_at).to be_present
+        expect(message).to be_pending
+        expect(message.delivery_lease_expires_at).to be_nil
+        expect(message.next_retry_at).to be_present
+        expect(endpoint.reload.circuit_failure_count).to eq(1)
+      end
+    end
+
+    it 'does not count or meter the same finalization twice' do
+      travel_to(nanosecond_now, with_usec: true) do
+        deliver(http_result(status: 500))
+        operation.call(message: message)
+
+        expect(endpoint.reload.circuit_failure_count).to eq(1)
+        expect(DeliveryMetric.find_by(project: project, day: Time.current.utc.to_date).attempts_count).to eq(1)
+      end
+    end
+
+    it 'opens the circuit on the configured consecutive failure threshold' do
+      travel_to(nanosecond_now, with_usec: true) do
+        allow(http_client).to receive(:post).and_return(http_result(status: 503))
+
+        Webhooks::CircuitPolicy::FAILURE_THRESHOLD.times do
+          operation.call(message: create(:message, project: project, endpoint: endpoint))
+        end
+
+        endpoint.reload
+        expect(endpoint).to be_circuit_open
+        expect(endpoint.circuit_failure_count).to eq(Webhooks::CircuitPolicy::FAILURE_THRESHOLD)
+        expect(endpoint.circuit_opened_at).to be_within(0.000_001).of(Time.current)
+      end
+    end
+  end
+
   describe 'tenant delivery policy' do
     it 'uses the free plan timeout of fifteen seconds by default' do
       allow(http_client).to receive(:post).and_return(http_result(status: 200))
@@ -756,6 +832,17 @@ describe Messages::Deliver, type: :operation do
 
       expect(message.reload.status).to eq('failed')
       expect(endpoint.reload.circuit_failure_count).to eq(0)
+    end
+
+    [400, 401].each do |status|
+      it "does not count an HTTP #{status} toward the circuit failures" do
+        deliver(http_result(status: status))
+
+        expect(message.reload.status).to eq('failed')
+        expect(message.delivery_attempts.sole.response_status).to eq(status)
+        expect(endpoint.reload.circuit_failure_count).to eq(0)
+        expect(endpoint).to be_enabled
+      end
     end
 
     it 'does not count a rejected destination toward the circuit failures' do

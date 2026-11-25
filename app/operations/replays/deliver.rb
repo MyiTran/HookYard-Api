@@ -68,9 +68,15 @@ module Replays
       item.mark_delivering!(lease_expires_at: lease_expires_at)
       attempt = item.message.delivery_attempts.create!(attributes.merge(replay_item_id: item.id))
 
-      Claim.new(outcome: :claimed, attempt: attempt, lease_expires_at: lease_expires_at)
+      Claim.new(outcome: :claimed, attempt: attempt, lease_expires_at: persisted_lease_expires_at)
     rescue StandardError => e
       fail_item(EVIDENCE_ERROR_TYPE, e.message)
+    end
+
+    # The claim must hold the timestamp PostgreSQL actually stored (timestamp(6)); a Ruby
+    # timestamp with nanoseconds never compares equal to the persisted value.
+    def persisted_lease_expires_at
+      item.reload.delivery_lease_expires_at
     end
 
     def next_attempt_number

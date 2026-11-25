@@ -97,7 +97,14 @@ module Messages
       message.mark_delivering!(lease_expires_at: lease_expires_at, attempt_count: attempt_number)
       attempt = message.delivery_attempts.create!(attributes)
 
-      Claim.new(outcome: :claimed, attempt: attempt, lease_expires_at: lease_expires_at)
+      Claim.new(outcome: :claimed, attempt: attempt, lease_expires_at: persisted_lease_expires_at)
+    end
+
+    # PostgreSQL stores messages.delivery_lease_expires_at as timestamp(6) while the Ruby
+    # clock carries nanoseconds, so only the value read back from the row can match what
+    # a concurrent worker sees. Comparing an untruncated Ruby value silently loses ownership.
+    def persisted_lease_expires_at
+      message.reload.delivery_lease_expires_at
     end
 
     def failed_claim!
