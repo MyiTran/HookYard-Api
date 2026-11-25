@@ -147,6 +147,176 @@ describe Messages::RecoverStaleLeases, type: :operation do
       end
     end
 
+    context 'when the current attempt recorded a successful response' do
+      before do
+        start_delivery(message, attempt_count: 1, lease_expires_at: 1.minute.ago)
+        message.delivery_attempts.sole.update!(response_status: 200, duration_ms: 40)
+      end
+
+      it 'finishes the message as succeeded instead of scheduling another delivery' do
+        described_class.call
+
+        message.reload
+        expect(message.status).to eq('succeeded')
+        expect(message.terminal_at).to eq(now)
+        expect(message.next_retry_at).to be_nil
+        expect(message.delivery_lease_expires_at).to be_nil
+      end
+
+      it 'keeps the recorded attempt evidence untouched' do
+        described_class.call
+
+        attempt = message.delivery_attempts.sole.reload
+        expect(attempt.response_status).to eq(200)
+        expect(attempt.duration_ms).to eq(40)
+        expect(attempt.error_type).to be_nil
+      end
+
+      it 'resets the endpoint circuit failures' do
+        endpoint.update!(circuit_failure_count: 3)
+
+        described_class.call
+
+        expect(endpoint.reload.circuit_failure_count).to eq(0)
+      end
+
+      it 'meters the recorded attempt exactly once' do
+        described_class.call
+        described_class.call
+
+        metrics = DeliveryMetric.where(project: project)
+        expect(message.delivery_attempts.sole.reload.metrics_recorded_at).to be_present
+        expect(metrics.sum(:attempts_count)).to eq(1)
+        expect(metrics.sum(:successes_count)).to eq(1)
+      end
+    end
+
+    [400, 401].each do |status|
+      context "when the current attempt recorded an HTTP #{status}" do
+        before do
+          start_delivery(message, attempt_count: 1, lease_expires_at: 1.minute.ago)
+          message.delivery_attempts.sole.update!(response_status: status)
+        end
+
+        it 'terminally fails the message instead of retrying it' do
+          described_class.call
+
+          message.reload
+          expect(message.status).to eq('failed')
+          expect(message.terminal_at).to eq(now)
+          expect(message.next_retry_at).to be_nil
+          expect(message.delivery_lease_expires_at).to be_nil
+        end
+
+        it 'never counts the client error toward the circuit failures' do
+          described_class.call
+
+          expect(endpoint.reload.circuit_failure_count).to eq(0)
+          expect(endpoint).to be_enabled
+        end
+      end
+    end
+
+    [408, 429, 500].each do |status|
+      context "when the current attempt recorded an HTTP #{status}" do
+        before do
+          start_delivery(message, attempt_count: 1, lease_expires_at: 1.minute.ago)
+          message.delivery_attempts.sole.update!(response_status: status)
+        end
+
+        it 'reschedules the policy retry without overwriting the recorded evidence' do
+          described_class.call
+
+          message.reload
+          attempt = message.delivery_attempts.sole
+          expect(message.status).to eq('pending')
+          expect(message.next_retry_at).to be_between(now + 5.seconds, now + 6.seconds)
+          expect(message.delivery_lease_expires_at).to be_nil
+          expect(attempt.response_status).to eq(status)
+          expect(attempt.error_type).to be_nil
+        end
+
+        it 'counts the recorded failure toward the circuit breaker once' do
+          described_class.call
+          described_class.call
+
+          expect(endpoint.reload.circuit_failure_count).to eq(1)
+        end
+      end
+    end
+
+    context 'when the current attempt recorded a retryable transport error' do
+      before do
+        start_delivery(message, attempt_count: 1, lease_expires_at: 1.minute.ago)
+        message.delivery_attempts.sole.update!(error_type: 'Net::ReadTimeout', error_message: 'Net::ReadTimeout')
+      end
+
+      it 'reschedules the policy retry and counts the failure' do
+        described_class.call
+
+        expect(message.reload.next_retry_at).to be_between(now + 5.seconds, now + 6.seconds)
+        expect(message.delivery_attempts.sole.reload.error_type).to eq('Net::ReadTimeout')
+        expect(endpoint.reload.circuit_failure_count).to eq(1)
+      end
+    end
+
+    context 'when the current attempt recorded a non-retryable transport error' do
+      before do
+        start_delivery(message, attempt_count: 1, lease_expires_at: 1.minute.ago)
+        message.delivery_attempts.sole.update!(error_type: 'ArgumentError', error_message: 'bad uri')
+      end
+
+      it 'terminally fails the message' do
+        described_class.call
+
+        message.reload
+        expect(message.status).to eq('failed')
+        expect(message.terminal_at).to eq(now)
+        expect(message.delivery_attempts.sole.reload.error_type).to eq('ArgumentError')
+      end
+    end
+
+    context 'when a replay attempt recorded a result but the current attempt did not' do
+      let(:run) { create(:replay_run, project: project) }
+
+      before do
+        start_delivery(message, attempt_count: 2, lease_expires_at: 1.minute.ago)
+        replay_item = create(:replay_item, replay_run: run, message: message, endpoint: endpoint,
+                                          status: ReplayItem::DELIVERING_STATUS,
+                                          delivery_lease_expires_at: 1.minute.ago)
+        create(:delivery_attempt, message: message, attempt_number: 3, replay_item: replay_item,
+                                  response_status: 200)
+      end
+
+      it 'recovers the interrupted delivery instead of trusting the replay result' do
+        described_class.call
+
+        message.reload
+        expect(message.status).to eq('pending')
+        expect(message.next_retry_at).to be_present
+        expect(message.delivery_attempts.find_by(attempt_number: 2).error_type)
+                       .to eq(DeliveryAttempt::LEASE_EXPIRED_ERROR_TYPE)
+        expect(message.delivery_attempts.find_by(attempt_number: 3).response_status).to eq(200)
+      end
+    end
+
+    context 'when the stale owner finalizes after recovery' do
+      before do
+        start_delivery(message, attempt_count: 1, lease_expires_at: 1.minute.ago)
+        message.delivery_attempts.sole.update!(response_status: 503)
+      end
+
+      it 'never double counts the circuit failure or the attempt metric' do
+        described_class.call
+        Messages::Deliver.new(http_client: double('http_client')).call(message: message)
+
+        metrics = DeliveryMetric.where(project: project)
+        expect(endpoint.reload.circuit_failure_count).to eq(1)
+        expect(metrics.sum(:attempts_count)).to eq(1)
+        expect(message.reload.status).to eq('pending')
+      end
+    end
+
     context 'when a delivering message has no lease' do
       before { message.update_columns(status: 'delivering', attempt_count: 1, delivery_lease_expires_at: nil) }
 

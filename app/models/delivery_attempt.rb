@@ -99,6 +99,18 @@ class DeliveryAttempt < ApplicationRecord
     response_status.present? || transport_failed?
   end
 
+  # A completed attempt holds the authoritative delivery result, so recovery can finish a
+  # delivery from this evidence instead of sending the request again.
+  def recorded_result
+    return Webhooks::HttpClient::Result.new(status: response_status, duration_ms: duration_ms) if response_status.present?
+
+    Webhooks::HttpClient::Result.new(
+      error: error_message.presence || error_type,
+      error_type: error_type,
+      duration_ms: duration_ms
+    )
+  end
+
   def replay?
     replay_item_id.present?
   end

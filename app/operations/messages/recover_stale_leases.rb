@@ -26,8 +26,26 @@ module Messages
       return if message.nil?
       return unless message.lease_expired?(now)
 
+      attempt = completed_current_attempt(message)
+      return finalize_recorded_result!(message, attempt, now) if attempt
+
       abandon_in_progress_attempt!(message)
       recover_endpoint!(message, now)
+    end
+
+    # A completed attempt already holds the authoritative HTTP result, so recovering it must
+    # not send the request again: the recorded evidence drives the normal result transition.
+    def finalize_recorded_result!(message, attempt, now)
+      Messages::FinalizeResult.call(
+        message: message, attempt: attempt, result: attempt.recorded_result, at: now
+      )
+    end
+
+    def completed_current_attempt(message)
+      attempt = message.delivery_attempts.find_by(attempt_number: message.attempt_count)
+      return nil if attempt.nil? || attempt.replay? || !attempt.completed?
+
+      attempt
     end
 
     def recover_endpoint!(message, now)

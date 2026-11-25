@@ -96,6 +96,91 @@ describe Replays::RecoverStaleLeases, type: :operation do
       end
     end
 
+    context 'when the replay attempt recorded a successful response' do
+      before do
+        message.update!(status: :failed, terminal_at: 1.minute.ago)
+        endpoint.update!(circuit_failure_count: 2)
+        start_delivery(item, lease_expires_at: 1.minute.ago)
+        create(:delivery_attempt, message: message, attempt_number: 1, replay_item: item,
+                                  request_url: endpoint.url, request_body: '{"id":"evt"}',
+                                  response_status: 200, duration_ms: 12)
+      end
+
+      it 'finishes the item as succeeded from the recorded evidence' do
+        described_class.call
+
+        item.reload
+        expect(item.status).to eq(ReplayItem::SUCCEEDED_STATUS)
+        expect(item.completed_at).to eq(now)
+        expect(item.delivery_lease_expires_at).to be_nil
+        expect(item.error_type).to be_nil
+        expect(item.error_message).to be_nil
+      end
+
+      it 'marks the replayed message succeeded and resets the circuit failures' do
+        described_class.call
+
+        expect(message.reload.status).to eq('succeeded')
+        expect(endpoint.reload.circuit_failure_count).to eq(0)
+      end
+
+      it 'keeps the recorded attempt evidence untouched' do
+        described_class.call
+
+        attempt = item.delivery_attempt.reload
+        expect(attempt.response_status).to eq(200)
+        expect(attempt.duration_ms).to eq(12)
+        expect(attempt.error_type).to be_nil
+      end
+
+      it 'meters the replay attempt exactly once' do
+        described_class.call
+        described_class.call
+
+        expect(DeliveryMetric.where(project: project).sum(:attempts_count)).to eq(1)
+        expect(DeliveryMetric.where(project: project).sum(:successes_count)).to eq(1)
+      end
+    end
+
+    context 'when the replay attempt recorded a failure response' do
+      before do
+        start_delivery(item, lease_expires_at: 1.minute.ago)
+        create(:delivery_attempt, message: message, attempt_number: 1, replay_item: item,
+                                  request_url: endpoint.url, request_body: '{"id":"evt"}',
+                                  response_status: 503)
+      end
+
+      it 'fails the item from the recorded evidence and counts the circuit failure once' do
+        described_class.call
+        described_class.call
+
+        item.reload
+        expect(item.status).to eq(ReplayItem::FAILED_STATUS)
+        expect(item.completed_at).to eq(now)
+        expect(item.error_type).to be_nil
+        expect(endpoint.reload.circuit_failure_count).to eq(1)
+      end
+    end
+
+    context 'when the replay attempt recorded a transport error' do
+      before do
+        start_delivery(item, lease_expires_at: 1.minute.ago)
+        create(:delivery_attempt, message: message, attempt_number: 1, replay_item: item,
+                                  request_url: endpoint.url, request_body: '{"id":"evt"}',
+                                  error_type: 'Net::ReadTimeout', error_message: 'Net::ReadTimeout')
+      end
+
+      it 'keeps the recorded transport error instead of the lease expiry error' do
+        described_class.call
+
+        item.reload
+        expect(item.status).to eq(ReplayItem::FAILED_STATUS)
+        expect(item.error_type).to eq('Net::ReadTimeout')
+        expect(item.error_message).to eq('Net::ReadTimeout')
+        expect(item.delivery_attempt.reload.error_type).to eq('Net::ReadTimeout')
+      end
+    end
+
     context 'when quota was already reserved for the replay' do
       before do
         start_delivery(item, lease_expires_at: 1.minute.ago)

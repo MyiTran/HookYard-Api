@@ -192,10 +192,9 @@ module Messages
             next unless outcome == :recorded
 
             if owns_lease?(claim.lease_expires_at)
-              DeliveryMetric.record_attempt!(claim.attempt.reload)
-              retry_at = transition_after_result!(result)
-              resolve_circuit!(endpoint.reload, result)
-              hold_for_open_circuit!(endpoint.reload) if retry_at
+              retry_at = Messages::FinalizeResult.call(
+                message: message, attempt: claim.attempt.reload, result: result
+              )
             else
               outcome = :lease_lost
             end
@@ -209,13 +208,6 @@ module Messages
       log_finalization(claim, :finalization_failed)
       preserve_evidence_after_finalization_failure!(claim, result)
       raise
-    end
-
-    def hold_for_open_circuit!(endpoint)
-      return if endpoint.enabled?
-
-      message.reload
-      message.hold!(reason: endpoint.circuit_hold_reason) unless message.held?
     end
 
     def owns_lease?(lease_expires_at)
@@ -291,52 +283,6 @@ module Messages
       )
     rescue StandardError
       nil
-    end
-
-    def transition_after_result!(result)
-      if Webhooks::CircuitPolicy.success?(result)
-        message.mark_succeeded!
-        return nil
-      end
-
-      retry_at = retry_at_for(result)
-      if retry_at
-        message.schedule_retry!(at: retry_at)
-        retry_at
-      else
-        message.mark_failed!
-        nil
-      end
-    end
-
-    def retry_at_for(result)
-      return nil unless retryable_result?(result) && message.retries_available?
-
-      delay = Webhooks::DeliveryPolicy.retry_delay(message.attempt_count, project: project)
-      delay && Time.current + delay
-    end
-
-    def resolve_circuit!(endpoint, result)
-      if Webhooks::CircuitPolicy.success?(result)
-        reset_circuit_failures!(endpoint)
-      else
-        endpoint.register_circuit_failure!(result)
-      end
-    end
-
-    def reset_circuit_failures!(endpoint)
-      return unless endpoint.enabled?
-      return if endpoint.circuit_failure_count.zero?
-
-      endpoint.update!(circuit_failure_count: 0)
-    end
-
-    def retryable_result?(result)
-      Webhooks::DeliveryPolicy.retryable?(result)
-    end
-
-    def project
-      message.endpoint.project
     end
 
     def reschedule_after_capacity(claim)

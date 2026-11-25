@@ -127,8 +127,7 @@ module Replays
             next unless owns_lease?(claim)
 
             record_result(claim.attempt, result)
-            finish_item(result)
-            resolve_circuit!(endpoint.reload, result)
+            Replays::FinalizeResult.call(item: item, attempt: claim.attempt, result: result)
           end
         end
       end
@@ -153,42 +152,6 @@ module Replays
           duration_ms: result.duration_ms
         )
       end
-
-      DeliveryMetric.record_attempt!(attempt)
-    end
-
-    def finish_item(result)
-      if Webhooks::CircuitPolicy.success?(result)
-        item.mark_succeeded!
-        item.message.mark_succeeded_by_replay!
-      else
-        item.mark_failed!(error_type: failure_type(result), error_message: failure_message(result))
-      end
-    end
-
-    def resolve_circuit!(endpoint, result)
-      if Webhooks::CircuitPolicy.success?(result)
-        reset_circuit_failures!(endpoint)
-      else
-        endpoint.register_circuit_failure!(result)
-      end
-    end
-
-    def reset_circuit_failures!(endpoint)
-      return unless endpoint.enabled?
-      return if endpoint.circuit_failure_count.zero?
-
-      endpoint.update!(circuit_failure_count: 0)
-    end
-
-    def failure_type(result)
-      result.error? ? result.error_type : nil
-    end
-
-    def failure_message(result)
-      return nil unless result.error?
-
-      DeliveryAttempt.truncate_error_message(result.error)
     end
 
     def endpoint
