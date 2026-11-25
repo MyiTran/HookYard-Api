@@ -17,7 +17,11 @@ module Webhooks
       Net::WriteTimeout
       Errno::ETIMEDOUT
     ].freeze
-    INTERRUPTED_ERROR_TYPES = %w[DeliveryLeaseExpired].freeze
+    INTERRUPTED_ERROR_TYPES = %w[
+      DeliveryLeaseExpired
+      DeliveryLeaseSuperseded
+      DeliveryFinalizationInterrupted
+    ].freeze
 
     module_function
 

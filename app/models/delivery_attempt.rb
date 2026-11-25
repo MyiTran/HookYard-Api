@@ -45,6 +45,10 @@ class DeliveryAttempt < ApplicationRecord
   ERROR_MESSAGE_MAX_BYTES = Webhooks::ResponseEvidence::ERROR_MESSAGE_MAX_BYTES
   LEASE_EXPIRED_ERROR_TYPE = 'DeliveryLeaseExpired'
   LEASE_EXPIRED_MESSAGE = 'delivery lease expired before the attempt completed'
+  LEASE_SUPERSEDED_ERROR_TYPE = 'DeliveryLeaseSuperseded'
+  LEASE_SUPERSEDED_MESSAGE = 'delivery lease was lost before the attempt result could be finalized'
+  FINALIZATION_INTERRUPTED_ERROR_TYPE = 'DeliveryFinalizationInterrupted'
+  FINALIZATION_INTERRUPTED_MESSAGE = 'delivery finalization was interrupted before a result could be recorded'
   RESPONSE_SUCCESS_STATUSES = (200..299)
   SENSITIVE_HEADERS = Webhooks::ResponseEvidence::SENSITIVE_HEADERS
   EVIDENCE_FIELDS = %i[

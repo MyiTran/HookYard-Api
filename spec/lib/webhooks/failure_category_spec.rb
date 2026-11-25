@@ -44,8 +44,10 @@ describe Webhooks::FailureCategory do
       expect(described_class::INTERRUPTED).to eq('interrupted')
     end
 
-    it 'cover the lease expiry error type used by the delivery attempts' do
+    it 'cover the interrupted error types used by delivery attempts' do
       expect(described_class::INTERRUPTED_ERROR_TYPES).to include(DeliveryAttempt::LEASE_EXPIRED_ERROR_TYPE)
+      expect(described_class::INTERRUPTED_ERROR_TYPES).to include(DeliveryAttempt::LEASE_SUPERSEDED_ERROR_TYPE)
+      expect(described_class::INTERRUPTED_ERROR_TYPES).to include(DeliveryAttempt::FINALIZATION_INTERRUPTED_ERROR_TYPE)
     end
   end
 end

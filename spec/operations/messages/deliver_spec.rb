@@ -572,6 +572,60 @@ describe Messages::Deliver, type: :operation do
   end
 
   describe 'lease ownership' do
+    it 'records a successful HTTP result without changing lifecycle state after losing the lease' do
+      allow(http_client).to receive(:post) do
+        message.update_columns(status: 'pending', delivery_lease_expires_at: nil)
+        http_result(status: 204, duration_ms: 17)
+      end
+
+      expect { operation.call(message: message) }.not_to have_enqueued_job(Messages::DeliverJob)
+
+      attempt = message.reload.delivery_attempts.sole
+      expect(attempt.response_status).to eq(204)
+      expect(attempt.duration_ms).to eq(17)
+      expect(attempt.error_type).to be_nil
+      expect(attempt.metrics_recorded_at).to be_nil
+      expect(message).to be_pending
+      expect(message.next_retry_at).to be_nil
+      expect(endpoint.reload.circuit_failure_count).to eq(0)
+    end
+
+    it 'records a failed HTTP result without retrying or changing the circuit after losing the lease' do
+      allow(http_client).to receive(:post) do
+        message.update_columns(status: 'pending', delivery_lease_expires_at: nil)
+        http_result(status: 503, duration_ms: 19)
+      end
+
+      expect { operation.call(message: message) }.not_to have_enqueued_job(Messages::DeliverJob)
+
+      attempt = message.reload.delivery_attempts.sole
+      expect(attempt.response_status).to eq(503)
+      expect(attempt.duration_ms).to eq(19)
+      expect(attempt.error_type).to be_nil
+      expect(attempt.metrics_recorded_at).to be_nil
+      expect(message).to be_pending
+      expect(message.next_retry_at).to be_nil
+      expect(endpoint.reload.circuit_failure_count).to eq(0)
+    end
+
+    it 'records a transport failure without retrying or changing the circuit after losing the lease' do
+      allow(http_client).to receive(:post) do
+        message.update_columns(status: 'pending', delivery_lease_expires_at: nil)
+        http_result(error: 'resolution failed', error_type: 'Webhooks::DestinationResolver::ResolutionFailed', duration_ms: 23)
+      end
+
+      expect { operation.call(message: message) }.not_to have_enqueued_job(Messages::DeliverJob)
+
+      attempt = message.reload.delivery_attempts.sole
+      expect(attempt.response_status).to be_nil
+      expect(attempt.error_type).to eq('Webhooks::DestinationResolver::ResolutionFailed')
+      expect(attempt.duration_ms).to eq(23)
+      expect(attempt.metrics_recorded_at).to be_nil
+      expect(message).to be_pending
+      expect(message.next_retry_at).to be_nil
+      expect(endpoint.reload.circuit_failure_count).to eq(0)
+    end
+
     it 'does not overwrite a message recovered after the lease expired' do
       recovered_attempt = nil
       allow(http_client).to receive(:post) do
@@ -586,6 +640,45 @@ describe Messages::Deliver, type: :operation do
       expect(message.terminal_at).to be_nil
       expect(message.delivery_lease_expires_at).to be_nil
       expect(recovered_attempt.error_type).to eq(DeliveryAttempt::LEASE_EXPIRED_ERROR_TYPE)
+    end
+
+    it 'keeps the delivery result when delivery finalizes before stale recovery runs' do
+      deliver(http_result(status: 204, duration_ms: 17))
+
+      Messages::RecoverStaleLeases.call(now: 10.minutes.from_now)
+
+      attempt = message.reload.delivery_attempts.sole
+      expect(attempt.response_status).to eq(204)
+      expect(attempt.error_type).to be_nil
+      expect(message).to be_succeeded
+    end
+
+    it 'keeps a completed attempt unchanged when another actor completes it first' do
+      completed_attempt = nil
+      allow(http_client).to receive(:post) do
+        completed_attempt = message.reload.delivery_attempts.sole
+        completed_attempt.update!(response_status: 202, duration_ms: 7)
+        message.update_columns(status: 'pending', delivery_lease_expires_at: nil)
+        http_result(status: 204, duration_ms: 17)
+      end
+
+      operation.call(message: message)
+
+      expect(completed_attempt.reload.response_status).to eq(202)
+      expect(completed_attempt.duration_ms).to eq(7)
+      expect(message.reload).to be_pending
+    end
+
+    it 're-raises a finalization failure after preserving the HTTP evidence' do
+      allow(http_client).to receive(:post).and_return(http_result(status: 503, duration_ms: 29))
+      allow_any_instance_of(Endpoint).to receive(:register_circuit_failure!).and_raise(ActiveRecord::StatementInvalid, 'database write failed')
+
+      expect { operation.call(message: message) }.to raise_error(ActiveRecord::StatementInvalid, 'database write failed')
+
+      attempt = message.reload.delivery_attempts.sole
+      expect(attempt.response_status).to eq(503)
+      expect(attempt.duration_ms).to eq(29)
+      expect(attempt.error_type).to be_nil
     end
   end
 

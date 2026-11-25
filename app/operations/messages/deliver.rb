@@ -176,19 +176,32 @@ module Messages
     def finalize!(claim, result)
       retry_at = nil
       endpoint = message.endpoint
+      outcome = nil
 
       DeliveryAttempt.transaction do
         endpoint.with_lock do
-          recorded = record_locked!(claim, result) { |value| retry_at = value }
+          message.with_lock do
+            outcome = finalize_attempt_evidence!(claim, result)
+            next unless outcome == :recorded
 
-          if recorded
-            resolve_circuit!(endpoint.reload, result)
-            hold_for_open_circuit!(endpoint.reload) if retry_at
+            if owns_lease?(claim.lease_expires_at)
+              DeliveryMetric.record_attempt!(claim.attempt.reload)
+              retry_at = transition_after_result!(result)
+              resolve_circuit!(endpoint.reload, result)
+              hold_for_open_circuit!(endpoint.reload) if retry_at
+            else
+              outcome = :lease_lost
+            end
           end
         end
       end
 
       enqueue_retry(retry_at) if retry_at && !message.reload.held?
+      log_finalization(claim, outcome)
+    rescue StandardError
+      log_finalization(claim, :finalization_failed)
+      preserve_evidence_after_finalization_failure!(claim, result)
+      raise
     end
 
     def hold_for_open_circuit!(endpoint)
@@ -198,46 +211,79 @@ module Messages
       message.hold!(reason: endpoint.circuit_hold_reason) unless message.held?
     end
 
-    def record_locked!(claim, result)
-      recorded = false
-
-      message.with_lock do
-        next if superseded?(claim)
-
-        yield record_result!(claim.attempt, result)
-        recorded = true
-      end
-
-      recorded
-    end
-
-    def superseded?(claim)
-      claim.attempt.reload.completed? || !owns_lease?(claim.lease_expires_at)
-    end
-
     def owns_lease?(lease_expires_at)
       message.delivering? && message.delivery_lease_expires_at == lease_expires_at
     end
 
-    def record_result!(attempt, result)
+    def finalize_attempt_evidence!(claim, result)
+      attempt = claim.attempt.reload
+      return :already_completed if attempt.completed?
+
+      return :recorded if record_evidence_if_pending!(attempt, result)
+
+      claim.attempt.reload.completed? ? :recovery_won : :lease_lost
+    end
+
+    def record_evidence_if_pending!(attempt, result)
+      DeliveryAttempt.where(id: attempt.id, response_status: nil, error_type: nil)
+                     .update_all(evidence_attributes(result).merge(updated_at: Time.current)) == 1
+    end
+
+    def evidence_attributes(result)
       if result.error?
-        attempt.update!(
+        {
           error_type: result.error_type,
           error_message: DeliveryAttempt.truncate_error_message(result.error),
           duration_ms: result.duration_ms
-        )
-      else
-        attempt.update!(
+        }
+      elsif result.status.present?
+        {
           response_status: result.status,
           response_headers: DeliveryAttempt.filter_headers(result.headers),
           response_body: DeliveryAttempt.truncate_response_body(result.body),
           duration_ms: result.duration_ms
-        )
+        }
+      else
+        {
+          error_type: DeliveryAttempt::LEASE_SUPERSEDED_ERROR_TYPE,
+          error_message: DeliveryAttempt::LEASE_SUPERSEDED_MESSAGE,
+          duration_ms: result.duration_ms
+        }
       end
+    end
 
-      DeliveryMetric.record_attempt!(attempt)
+    def preserve_evidence_after_finalization_failure!(claim, result)
+      DeliveryAttempt.transaction(requires_new: true) do
+        attempt = claim.attempt.reload
+        record_evidence_if_pending!(attempt, result || interruption_result) unless attempt.completed?
+      end
+    rescue StandardError
+      nil
+    end
 
-      transition_after_result!(result)
+    def interruption_result
+      Webhooks::HttpClient::Result.new(
+        error: DeliveryAttempt::FINALIZATION_INTERRUPTED_MESSAGE,
+        error_type: DeliveryAttempt::FINALIZATION_INTERRUPTED_ERROR_TYPE
+      )
+    end
+
+    def log_finalization(claim, outcome)
+      attempt = claim.attempt.reload
+      Rails.logger.info(
+        {
+          event: 'delivery_finalization',
+          message_id: message.id,
+          attempt_id: attempt.id,
+          expected_lease_expires_at: claim.lease_expires_at&.iso8601(6),
+          current_message_status: message.status,
+          current_lease_expires_at: message.delivery_lease_expires_at&.iso8601(6),
+          attempt_completed: attempt.completed?,
+          finalization_outcome: outcome
+        }.to_json
+      )
+    rescue StandardError
+      nil
     end
 
     def transition_after_result!(result)
