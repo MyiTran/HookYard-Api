@@ -1,10 +1,12 @@
 require 'rails_helper'
+Rake::Task.define_task(:environment)
+load Rails.root.join('lib/tasks/admin_demo.rake')
 
 describe 'admin:demo:seed', type: :task do
   let(:task) { Rake::Task['admin:demo:seed'] }
   let(:admin_password) { 'demo-password-123' }
   let(:env_keys) do
-    %w[HOOKYARD_DEMO_SEED DEMO_ADMIN_PASSWORD ADMIN_DEMO_ATTEMPT_COUNT ADMIN_DEMO_DRY_RUN
+    %w[HOOKYARD_DEMO_SEED DEMO_ADMIN_PASSWORD DEMO_DELIVERY_ATTEMPTS_TARGET ADMIN_DEMO_ATTEMPT_COUNT ADMIN_DEMO_DRY_RUN
        ADMIN_DEMO_CONFIRM_DATABASE ADMIN_DEMO_MAX_DB_MB]
   end
   let(:database_name) { ActiveRecord::Base.connection.select_value('SELECT current_database()') }
@@ -91,6 +93,23 @@ describe 'admin:demo:seed', type: :task do
     expect(output).to include('projected database:')
     expect(output).to include('dry run: nothing was written')
     expect(User.where("email LIKE 'demo-account-%'")).to be_empty
+  end
+
+  it 'uses the Render target env for a bounded dry run' do
+    ENV['HOOKYARD_DEMO_SEED'] = '1'
+    ENV['ADMIN_DEMO_DRY_RUN'] = '1'
+    ENV['DEMO_DELIVERY_ATTEMPTS_TARGET'] = '100000'
+
+    expect(capture_stdout).to include('requested attempts:    100000')
+  end
+
+  it 'prefers the Render target env over the legacy target env' do
+    ENV['HOOKYARD_DEMO_SEED'] = '1'
+    ENV['ADMIN_DEMO_DRY_RUN'] = '1'
+    ENV['DEMO_DELIVERY_ATTEMPTS_TARGET'] = '100000'
+    ENV['ADMIN_DEMO_ATTEMPT_COUNT'] = '500'
+
+    expect(capture_stdout).to include('requested attempts:    100000')
   end
 
   it 'seeds the requested total and reports what it inserted' do

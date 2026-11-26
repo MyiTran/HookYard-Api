@@ -1,6 +1,6 @@
 namespace :admin do
   namespace :demo do
-    desc 'Seed admin demo data up to ADMIN_DEMO_ATTEMPT_COUNT (ADMIN_DEMO_DRY_RUN=1 previews, ADMIN_DEMO_CONFIRM_DATABASE names the target)'
+    desc 'Seed admin demo data up to DEMO_DELIVERY_ATTEMPTS_TARGET (ADMIN_DEMO_DRY_RUN=1 previews, ADMIN_DEMO_CONFIRM_DATABASE names the target)'
     task seed: :environment do
       abort 'Set HOOKYARD_DEMO_SEED=1 to run the admin demo seed' unless ENV['HOOKYARD_DEMO_SEED'] == '1'
 
@@ -9,7 +9,9 @@ namespace :admin do
       abort 'DEMO_ADMIN_PASSWORD is required for the admin demo seed' if admin_password.blank? && !dry_run
 
       report = AdminDemo::Seeder.call(
-        attempt_count: ENV.fetch('ADMIN_DEMO_ATTEMPT_COUNT', AdminDemo::Seeder::ATTEMPT_DEFAULT.to_s),
+        attempt_count: ENV.fetch('DEMO_DELIVERY_ATTEMPTS_TARGET') {
+          ENV.fetch('ADMIN_DEMO_ATTEMPT_COUNT', AdminDemo::Seeder::ATTEMPT_DEFAULT.to_s)
+        },
         admin_password: admin_password,
         dry_run: dry_run,
         database_confirmation: ENV['ADMIN_DEMO_CONFIRM_DATABASE'],

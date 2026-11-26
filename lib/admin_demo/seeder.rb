@@ -1,6 +1,6 @@
 module AdminDemo
   class Seeder
-    ATTEMPT_DEFAULT = 100_000
+    ATTEMPT_DEFAULT = 200_000
     ATTEMPT_MAXIMUM = 200_000
     WINDOW_DAYS = 30
     BATCH_SIZE = 2_000
@@ -137,7 +137,7 @@ module AdminDemo
       return count if count&.between?(1, ATTEMPT_MAXIMUM)
 
       raise InvalidAttemptCountError,
-            "ADMIN_DEMO_ATTEMPT_COUNT must be an integer between 1 and #{ATTEMPT_MAXIMUM}"
+            "DEMO_DELIVERY_ATTEMPTS_TARGET must be an integer between 1 and #{ATTEMPT_MAXIMUM}"
     end
 
     def target_counts

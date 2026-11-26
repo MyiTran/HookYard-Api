@@ -104,7 +104,7 @@ metric rollups. It never runs on its own, never enqueues Sidekiq jobs and never 
 HOOKYARD_DEMO_SEED=1 \
 DEMO_ADMIN_PASSWORD=<password> \
 ADMIN_DEMO_CONFIRM_DATABASE=hookyard_api_development \
-ADMIN_DEMO_ATTEMPT_COUNT=100000 \
+DEMO_DELIVERY_ATTEMPTS_TARGET=100000 \
 bundle exec rake admin:demo:seed
 ```
 
@@ -115,7 +115,7 @@ start command (or a temporary pre-deploy command) at `bundle exec rake admin:dem
 guarded and idempotent, so an accidental extra boot is harmless.
 
 1. Set `HOOKYARD_DEMO_SEED=1`, `DEMO_ADMIN_PASSWORD`, `ADMIN_DEMO_CONFIRM_DATABASE=<database name>`,
-   `ADMIN_DEMO_ATTEMPT_COUNT=100000` and `ADMIN_DEMO_DRY_RUN=1`.
+   `DEMO_DELIVERY_ATTEMPTS_TARGET=100000` and `ADMIN_DEMO_DRY_RUN=1`.
 2. Deploy once and read the dry run in the logs: current demo attempts, requested target, additional
    records, current database size, estimated additional storage and projected final size.
 3. Set `ADMIN_DEMO_DRY_RUN=0` and deploy again to write.
@@ -126,13 +126,15 @@ database confirmation.
 
 ### Incremental scaling
 
-`ADMIN_DEMO_ATTEMPT_COUNT` is the **total** demo delivery-attempt target, not a delta (default `100000`,
+`DEMO_DELIVERY_ATTEMPTS_TARGET` is the **total** demo delivery-attempt target, not a delta (default `200000`,
 maximum `200000`):
 
 - first run with `100000` creates about 100000 demo attempts;
 - rerunning with `100000` inserts nothing;
 - raising it to `150000` adds only the missing records;
 - lowering it again deletes nothing.
+
+`ADMIN_DEMO_ATTEMPT_COUNT` remains supported as a legacy alias when the new variable is unset.
 
 Existing ids, relationships, timestamps, signing secrets, status distribution and metric rollups are
 preserved, and an interrupted run can simply be restarted.
