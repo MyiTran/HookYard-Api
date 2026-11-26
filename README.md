@@ -38,6 +38,8 @@ ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY=...
 ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT=...
 ```
 Nonblank `ACTIVE_RECORD_ENCRYPTION_*` values override the matching keys in Rails credentials; the `test` environment uses isolated keys from `config/environments/test.rb`. The `production` environment refuses to boot when a key is missing.
+
+Google sign-in requires the `GOOGLE_CLIENT_ID` environment variable. It must be the OAuth web client ID accepted by the backend; do not expose credentials or client secrets in the API or frontend bundle. Configure that Google Cloud OAuth client as a web application with only the intended development, staging, and production JavaScript origins. The credential-post flow does not use a redirect URI or a Google client secret.
 - Generate new rails master key
 ```bash
 rm -f config/credentials.yml.enc && rm -f config/master.key && EDITOR=vim bin/rails credentials:edit
