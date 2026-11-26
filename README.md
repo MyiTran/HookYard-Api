@@ -93,6 +93,59 @@ bundle exec brakeman
 bundle exec rubocop
 ```
 
+## Admin demo data
+
+`admin:demo:seed` fills an environment with namespaced demo accounts, projects, endpoints, deliveries and
+metric rollups. It never runs on its own, never enqueues Sidekiq jobs and never sends webhooks.
+
+```bash
+HOOKYARD_DEMO_SEED=1 \
+DEMO_ADMIN_PASSWORD=<password> \
+ADMIN_DEMO_CONFIRM_DATABASE=hookyard_api_development \
+ADMIN_DEMO_ATTEMPT_COUNT=100000 \
+bundle exec rake admin:demo:seed
+```
+
+### Render Free (no shell)
+
+Render Free has no shell, so drive the task with a one-off deploy of the same image: point the service's
+start command (or a temporary pre-deploy command) at `bundle exec rake admin:demo:seed`. The task is
+guarded and idempotent, so an accidental extra boot is harmless.
+
+1. Set `HOOKYARD_DEMO_SEED=1`, `DEMO_ADMIN_PASSWORD`, `ADMIN_DEMO_CONFIRM_DATABASE=<database name>`,
+   `ADMIN_DEMO_ATTEMPT_COUNT=100000` and `ADMIN_DEMO_DRY_RUN=1`.
+2. Deploy once and read the dry run in the logs: current demo attempts, requested target, additional
+   records, current database size, estimated additional storage and projected final size.
+3. Set `ADMIN_DEMO_DRY_RUN=0` and deploy again to write.
+4. Remove `HOOKYARD_DEMO_SEED` (or set it to `0`) so later boots do nothing.
+
+`DEMO_ADMIN_PASSWORD` is only required for a write run; a dry run needs neither a password nor a
+database confirmation.
+
+### Incremental scaling
+
+`ADMIN_DEMO_ATTEMPT_COUNT` is the **total** demo delivery-attempt target, not a delta (default `100000`,
+maximum `200000`):
+
+- first run with `100000` creates about 100000 demo attempts;
+- rerunning with `100000` inserts nothing;
+- raising it to `150000` adds only the missing records;
+- lowering it again deletes nothing.
+
+Existing ids, relationships, timestamps, signing secrets, status distribution and metric rollups are
+preserved, and an interrupted run can simply be restarted.
+
+### Safety limits
+
+- Runs write in batches of 2000 messages to stay inside a 512 MB instance.
+- `ADMIN_DEMO_MAX_DB_MB` (default `350`) aborts before writing when the *additional* records would push
+  `pg_database_size` past the limit.
+- `ADMIN_DEMO_CONFIRM_DATABASE` must match the target database name, so demo data cannot land in the
+  wrong database by accident.
+- A PostgreSQL advisory lock rejects a second concurrent seed.
+- Only demo-namespaced rows are ever read or written (`demo-account-*@hookyard.test`, `demo:project:`,
+  `demo:endpoint:`, `demo:event:`).
+
 ## License
 
 Licensed under the MIT license, see the separate [LICENSE.md](./LICENSE.md) file.

@@ -1,8 +1,15 @@
 module AdminDemo
   class Seeder
-    ATTEMPT_DEFAULT = 200_000
+    ATTEMPT_DEFAULT = 100_000
+    ATTEMPT_MAXIMUM = 200_000
     WINDOW_DAYS = 30
-    BATCH_SIZE = 5_000
+    BATCH_SIZE = 2_000
+    PROGRESS_EVERY_BATCHES = 10
+    MEGABYTE = 1024 * 1024
+    DEFAULT_DATABASE_LIMIT_MB = 350
+    ESTIMATED_BYTES_PER_ATTEMPT = 1_600
+    EXECUTION_LOCK_KEY = 7_310_552_914_338_201
+
     EMAIL_DOMAIN = 'hookyard.test'
     ADMIN_EMAIL = "demo-admin@#{EMAIL_DOMAIN}"
     SUPPORT_EMAILS = (1..3).map { |index| "demo-support-#{index}@#{EMAIL_DOMAIN}" }.freeze
@@ -29,6 +36,7 @@ module AdminDemo
     ).freeze
 
     ATTEMPT_COUNT_FOR = { succeeded: 1, failed: 3, held: 0 }.freeze
+    ATTEMPTS_PER_STATUS_CYCLE = STATUS_BUCKETS.sum { |status| ATTEMPT_COUNT_FOR.fetch(status, 0) }
 
     CIRCUIT_BUCKETS = (
       %w[enabled disabled] + Array.new(90, 'enabled') + Array.new(6, 'disabled')
@@ -47,36 +55,90 @@ module AdminDemo
       interrupted: [[nil, 'DeliveryLeaseExpired']]
     }.freeze
 
+    ROLLUP_SQL = <<~SQL.squish
+      INSERT INTO delivery_metrics (id, project_id, day, attempts_count, successes_count, failures_count, created_at, updated_at)
+      SELECT gen_random_uuid(), rollup.project_id, rollup.day, rollup.attempts_count, rollup.successes_count,
+             rollup.failures_count, NOW(), NOW()
+      FROM (
+        SELECT endpoints.project_id AS project_id,
+               (delivery_attempts.created_at AT TIME ZONE 'UTC')::date AS day,
+               COUNT(*) AS attempts_count,
+               COUNT(*) FILTER (WHERE delivery_attempts.response_status BETWEEN 200 AND 299) AS successes_count,
+               COUNT(*) FILTER (
+                 WHERE delivery_attempts.response_status IS NULL
+                    OR NOT (delivery_attempts.response_status BETWEEN 200 AND 299)
+               ) AS failures_count
+        FROM delivery_attempts
+        INNER JOIN messages ON messages.id = delivery_attempts.message_id
+        INNER JOIN endpoints ON endpoints.id = messages.endpoint_id
+        INNER JOIN events ON events.id = messages.event_id
+        WHERE events.idempotency_key LIKE ?
+          AND (
+            delivery_attempts.response_status IS NOT NULL
+            OR (delivery_attempts.error_type IS NOT NULL AND BTRIM(delivery_attempts.error_type) <> '')
+          )
+        GROUP BY endpoints.project_id, (delivery_attempts.created_at AT TIME ZONE 'UTC')::date
+      ) AS rollup
+      ON CONFLICT (project_id, day) DO UPDATE SET
+        attempts_count = EXCLUDED.attempts_count,
+        successes_count = EXCLUDED.successes_count,
+        failures_count = EXCLUDED.failures_count,
+        updated_at = NOW()
+      WHERE delivery_metrics.attempts_count <> EXCLUDED.attempts_count
+         OR delivery_metrics.successes_count <> EXCLUDED.successes_count
+         OR delivery_metrics.failures_count <> EXCLUDED.failures_count
+    SQL
+
+    class Error < StandardError; end
+    class InvalidAttemptCountError < Error; end
+    class DatabaseSizeExceededError < Error; end
+    class ConcurrentSeedError < Error; end
+    class DatabaseTargetError < Error; end
+
     def self.call(...)
       new(...).call
     end
 
-    def initialize(attempt_count: ATTEMPT_DEFAULT, admin_password:, now: Time.current)
-      @attempt_count = Integer(attempt_count)
+    def initialize(attempt_count: ATTEMPT_DEFAULT, admin_password: nil, dry_run: false,
+                   database_confirmation: nil, max_database_size_mb: nil, now: Time.current)
+      @attempt_count = parse_attempt_count(attempt_count)
       @admin_password = admin_password.to_s
+      @dry_run = dry_run
+      @database_confirmation = database_confirmation.to_s.strip
+      @max_database_size_mb = Float(max_database_size_mb.presence || DEFAULT_DATABASE_LIMIT_MB)
       @now = now
-      raise ArgumentError, 'attempt_count must be a positive integer' unless @attempt_count.positive?
-      raise ArgumentError, 'admin_password must be present' if @admin_password.blank?
-
       @window_start = now - WINDOW_DAYS.days
-      @metrics = Hash.new { |hash, key| hash[key] = { attempts_count: 0, successes_count: 0, failures_count: 0 } }
+
+      raise ArgumentError, 'admin_password must be present' if @admin_password.blank? && !@dry_run
     end
 
     def call
       @counts = target_counts
 
-      {
-        accounts: seed_accounts,
-        projects: seed_projects,
-        endpoints: seed_endpoints,
-        signing_secrets: seed_signing_secrets,
-        **seed_deliveries
-      }
+      return build_report if @dry_run
+
+      verify_database_target!
+
+      with_execution_lock do
+        report = build_report
+        verify_database_size!(report)
+        report[:inserted] = seed
+        report[:final] = existing_demo_counts
+        report
+      end
     end
 
     private
 
     attr_reader :counts
+
+    def parse_attempt_count(value)
+      count = Integer(value.to_s, exception: false)
+      return count if count&.between?(1, ATTEMPT_MAXIMUM)
+
+      raise InvalidAttemptCountError,
+            "ADMIN_DEMO_ATTEMPT_COUNT must be an integer between 1 and #{ATTEMPT_MAXIMUM}"
+    end
 
     def target_counts
       {
@@ -87,58 +149,195 @@ module AdminDemo
       }
     end
 
+    def build_report
+      existing = existing_demo_counts
+      targets = target_snapshot
+      pending = pending_counts(targets, existing)
+
+      {
+        dry_run: @dry_run,
+        database: database_snapshot(pending),
+        requested_attempt_count: @attempt_count,
+        targets: targets,
+        existing: existing,
+        pending: pending,
+        inserted: empty_inserted_counts,
+        final: nil
+      }
+    end
+
+    def target_snapshot
+      {
+        accounts: counts[:accounts],
+        projects: counts[:projects],
+        endpoints: counts[:endpoints],
+        signing_secrets: signing_secret_target_count,
+        events: counts[:messages],
+        messages: counts[:messages],
+        delivery_attempts: expected_attempt_count,
+        delivery_metrics: counts[:projects] * (WINDOW_DAYS + 1)
+      }
+    end
+
+    def existing_demo_counts
+      {
+        accounts: User.where('email LIKE ?', "demo-account-%@#{EMAIL_DOMAIN}").count,
+        projects: demo_projects.count,
+        endpoints: demo_endpoints.count,
+        signing_secrets: EndpointSigningSecret.current.where(endpoint_id: demo_endpoints.select(:id)).count,
+        events: demo_events.count,
+        messages: demo_messages.count,
+        delivery_attempts: DeliveryAttempt.where(message_id: demo_messages.select(:id)).count,
+        delivery_metrics: DeliveryMetric.where(project_id: demo_projects.select(:id)).count
+      }
+    end
+
+    def pending_counts(targets, existing)
+      targets.each_with_object({}) do |(key, target), pending|
+        pending[key] = [target - existing.fetch(key), 0].max
+      end
+    end
+
+    def database_snapshot(pending)
+      current_bytes = current_database_bytes
+      growth_bytes = pending[:delivery_attempts] * ESTIMATED_BYTES_PER_ATTEMPT
+
+      {
+        name: current_database_name,
+        environment: Rails.env,
+        current_bytes: current_bytes,
+        growth_bytes: growth_bytes,
+        projected_bytes: current_bytes + growth_bytes,
+        limit_bytes: (@max_database_size_mb * MEGABYTE).to_i
+      }
+    end
+
+    def empty_inserted_counts
+      {
+        accounts: 0,
+        projects: 0,
+        endpoints: 0,
+        signing_secrets: 0,
+        events: 0,
+        messages: 0,
+        delivery_attempts: 0,
+        delivery_metrics: 0
+      }
+    end
+
+    def current_database_name
+      @current_database_name ||= ActiveRecord::Base.connection.select_value('SELECT current_database()')
+    end
+
+    def current_database_bytes
+      ActiveRecord::Base.connection.select_value('SELECT pg_database_size(current_database())').to_i
+    end
+
+    def verify_database_target!
+      return if @database_confirmation == current_database_name
+
+      raise DatabaseTargetError,
+            "set ADMIN_DEMO_CONFIRM_DATABASE=#{current_database_name} to confirm the target database"
+    end
+
+    def verify_database_size!(report)
+      database = report[:database]
+      return if database[:projected_bytes] <= database[:limit_bytes]
+
+      raise DatabaseSizeExceededError,
+            "estimated database size #{human_size(database[:projected_bytes])} would exceed the " \
+            "#{human_size(database[:limit_bytes])} limit; lower ADMIN_DEMO_ATTEMPT_COUNT or raise ADMIN_DEMO_MAX_DB_MB"
+    end
+
+    def with_execution_lock
+      ActiveRecord::Base.connection_pool.with_connection do |connection|
+        unless connection.select_value("SELECT pg_try_advisory_lock(#{EXECUTION_LOCK_KEY})")
+          raise ConcurrentSeedError, 'another admin demo seed is already running'
+        end
+
+        begin
+          yield
+        ensure
+          connection.execute("SELECT pg_advisory_unlock(#{EXECUTION_LOCK_KEY})")
+        end
+      end
+    end
+
+    def seed
+      {
+        accounts: seed_accounts,
+        projects: seed_projects,
+        endpoints: seed_endpoints,
+        signing_secrets: seed_signing_secrets,
+        **seed_deliveries
+      }
+    end
+
     def seed_accounts
       rows = Array.new(counts[:accounts]) { |index| account_row(index) } + staff_account_rows
-      inserted = User.insert_all(rows, unique_by: :id, returning: :id, record_timestamps: false).rows.size
+      inserted = insert_rows(User, rows)
       assign_staff_roles
 
       inserted
     end
 
     def seed_projects
-      rows = Array.new(counts[:projects]) { |index| project_row(index) }
-      inserted = Project.insert_all(rows, unique_by: :id, returning: :id, record_timestamps: false).rows.size
+      inserted = insert_rows(Project, Array.new(counts[:projects]) { |index| project_row(index) })
       seed_project_owners
 
       inserted
     end
 
     def seed_endpoints
-      rows = Array.new(counts[:endpoints]) { |index| endpoint_row(index) }
-      Endpoint.insert_all(rows, unique_by: :id, returning: :id, record_timestamps: false).rows.size
+      insert_rows(Endpoint, Array.new(counts[:endpoints]) { |index| endpoint_row(index) })
     end
 
     def seed_signing_secrets
-      created = 0
-
-      Endpoint.active.not_archived.find_each do |endpoint|
-        secret = EndpointSigningSecret.where(endpoint_id: endpoint.id, retired_at: nil).first_or_initialize
-        next if secret.persisted?
-
-        secret.assign_attributes(
+      missing_secret_endpoints.pluck(:id, :created_at).sum do |endpoint_id, created_at|
+        EndpointSigningSecret.create!(
+          endpoint_id: endpoint_id,
           version: SIGNING_SECRET_VERSION,
-          secret: signing_secret_for(endpoint.id),
-          created_at: endpoint.created_at,
-          updated_at: endpoint.created_at
+          secret: signing_secret_for(endpoint_id),
+          created_at: created_at,
+          updated_at: created_at
         )
-        secret.save!
-        created += 1
+        1
       end
+    end
 
-      created
+    def missing_secret_endpoints
+      Endpoint.where(id: demo_endpoint_ids).active.not_archived
+              .where.not(id: EndpointSigningSecret.current.select(:endpoint_id))
     end
 
     def seed_deliveries
       inserted = { events: 0, messages: 0, delivery_attempts: 0 }
+      processed_batches = 0
 
       (0...counts[:messages]).step(BATCH_SIZE) do |start|
-        events, messages, attempts = delivery_rows(start, [start + BATCH_SIZE, counts[:messages]].min)
+        finish = [start + BATCH_SIZE, counts[:messages]].min
+        events, messages, attempts = delivery_rows(start, finish)
+
         inserted[:events] += insert_rows(Event, events)
         inserted[:messages] += insert_rows(Message, messages)
         inserted[:delivery_attempts] += insert_rows(DeliveryAttempt, attempts)
+
+        processed_batches += 1
+        log_progress(finish) if (processed_batches % PROGRESS_EVERY_BATCHES).zero?
       end
 
       inserted.merge(delivery_metrics: seed_delivery_metrics)
+    end
+
+    def log_progress(processed_messages)
+      Rails.logger.info("admin demo seed: processed #{processed_messages}/#{counts[:messages]} demo messages")
+    end
+
+    def seed_delivery_metrics
+      DeliveryMetric.connection.exec_update(
+        ActiveRecord::Base.sanitize_sql([ROLLUP_SQL, "#{EVENT_PREFIX}%"]),
+        'admin demo delivery metric rollup'
+      )
     end
 
     def insert_rows(model, rows)
@@ -252,8 +451,8 @@ module AdminDemo
         project_id: project_id_for_endpoint(index),
         name: "#{ENDPOINT_PREFIX}#{index}",
         url: endpoint_url(index),
-        active: !(index % 20).zero?,
-        archived_at: (index % 25).zero? ? clamp_to_now(created_at + 1.day) : nil,
+        active: endpoint_active?(index),
+        archived_at: endpoint_archived?(index) ? clamp_to_now(created_at + 1.day) : nil,
         event_types: index % 10 == 0 ? ['*'] : [EVENT_TYPES[index % EVENT_TYPES.size]],
         circuit_state: circuit_state,
         circuit_failure_count: circuit_state == 'enabled' ? 0 : 5 + (index % 5),
@@ -265,6 +464,18 @@ module AdminDemo
         created_at: created_at,
         updated_at: created_at
       }
+    end
+
+    def endpoint_active?(index)
+      !(index % 20).zero?
+    end
+
+    def endpoint_archived?(index)
+      (index % 25).zero?
+    end
+
+    def signing_secret_target_count
+      (0...counts[:endpoints]).count { |index| endpoint_active?(index) && !endpoint_archived?(index) }
     end
 
     def event_row(index, created_at, endpoint_index = nil)
@@ -308,8 +519,6 @@ module AdminDemo
         at = clamp_to_now(created_at + (number * 5).minutes)
         evidence = attempt_evidence(status, index, number)
 
-        record_metric(project_id_for_endpoint(index % counts[:endpoints]), at, status) if terminal_status?(status)
-
         attempt_row(message_id, index, number, evidence, at)
       end
     end
@@ -348,31 +557,6 @@ module AdminDemo
       response_status, error_type = options[pseudo_random("evidence/#{index}/#{number}") % options.size]
 
       { response_status: response_status, error_type: error_type }
-    end
-
-    def record_metric(project_id, at, status)
-      day = at.utc.to_date
-      key = [project_id, day]
-
-      @metrics[key][:attempts_count] += 1
-      status == :succeeded ? @metrics[key][:successes_count] += 1 : @metrics[key][:failures_count] += 1
-    end
-
-    def seed_delivery_metrics
-      rows = @metrics.map do |(project_id, day), counts|
-        {
-          id: demo_uuid("delivery-metric/#{project_id}/#{day}"),
-          project_id: project_id,
-          day: day,
-          attempts_count: counts[:attempts_count],
-          successes_count: counts[:successes_count],
-          failures_count: counts[:failures_count],
-          created_at: @now,
-          updated_at: @now
-        }
-      end
-
-      insert_rows(DeliveryMetric, rows)
     end
 
     def terminal_attempt?(evidence)
@@ -415,6 +599,33 @@ module AdminDemo
       demo_uuid("project/#{endpoint_index % counts[:projects]}")
     end
 
+    def demo_endpoint_ids
+      @demo_endpoint_ids ||= Array.new(counts[:endpoints]) { |index| demo_uuid("endpoint/#{index}") }
+    end
+
+    def demo_projects
+      Project.where('name LIKE ?', "#{PROJECT_PREFIX}%")
+    end
+
+    def demo_endpoints
+      Endpoint.where('name LIKE ?', "#{ENDPOINT_PREFIX}%")
+    end
+
+    def demo_events
+      Event.where('idempotency_key LIKE ?', "#{EVENT_PREFIX}%")
+    end
+
+    def demo_messages
+      Message.where(event_id: demo_events.select(:id))
+    end
+
+    def expected_attempt_count
+      cycles, remainder = counts[:messages].divmod(STATUS_BUCKETS.size)
+      remainder_attempts = STATUS_BUCKETS.first(remainder).sum { |status| ATTEMPT_COUNT_FOR.fetch(status, 0) }
+
+      (cycles * ATTEMPTS_PER_STATUS_CYCLE) + remainder_attempts
+    end
+
     def timestamp_for(label)
       @window_start + (pseudo_random(label) % WINDOW_DAYS.days.to_i)
     end
@@ -440,6 +651,10 @@ module AdminDemo
     def signing_secret_for(endpoint_id)
       digest = Digest::SHA256.digest("hookyard-admin-demo/signing-secret/#{endpoint_id}")
       "whsec_#{Base64.strict_encode64(digest).first(32)}"
+    end
+
+    def human_size(bytes)
+      ActiveSupport::NumberHelper.number_to_human_size(bytes)
     end
   end
 end
