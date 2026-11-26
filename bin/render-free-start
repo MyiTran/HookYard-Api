@@ -6,6 +6,13 @@ export RAILS_MAX_THREADS="${RAILS_MAX_THREADS:-3}"
 export RAILS_MIN_THREADS="${RAILS_MIN_THREADS:-3}"
 export SIDEKIQ_CONCURRENCY="${SIDEKIQ_CONCURRENCY:-2}"
 
+if [[ "${RUN_DB_MIGRATIONS:-}" == "1" || "${RUN_DB_MIGRATIONS:-}" == "true" ]]; then
+  bundle exec rails db:migrate || {
+    status=$?
+    exit "$status"
+  }
+fi
+
 puma_pid=''
 sidekiq_pid=''
 

@@ -20,4 +20,19 @@ RSpec.describe Pathname do
     expect(source).to include('wait -n')
     expect(source).to include('kill -TERM')
   end
+
+  it 'runs migrations only when explicitly enabled before starting workers' do
+    expect(source).to include('RUN_DB_MIGRATIONS')
+    expect(source).to include('bundle exec rails db:migrate')
+    expect(source).to include('if [[ "${RUN_DB_MIGRATIONS:-}" == "1" || "${RUN_DB_MIGRATIONS:-}" == "true" ]]')
+    expect(source.index('bundle exec rails db:migrate')).to be < source.index('bundle exec puma')
+  end
+
+  it 'does not start workers when migration fails' do
+    migration_block = source[/if \[\[.*?fi/m]
+
+    expect(migration_block).to include('bundle exec rails db:migrate')
+    expect(migration_block).to include('exit')
+    expect(migration_block).not_to include('|| true')
+  end
 end
