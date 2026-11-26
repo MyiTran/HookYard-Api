@@ -324,7 +324,8 @@ Devise.setup do |config|
     jwt.secret = ENV.fetch('JWT_SECRET_KEY', Rails.application.secret_key_base)
     jwt.expiration_time = (ENV.fetch('JWT_EXPIRED_DAYS', 7).to_i).days.to_i
     jwt.dispatch_requests = [
-      ['POST', %r{^/api/v1/auth/sign_in$}]
+      ['POST', %r{^/api/v1/auth/sign_in$}],
+      ['POST', %r{^/api/v1/auth/google$}]
     ]
     jwt.revocation_requests = [
       ['DELETE', %r{^/api/v1/auth/sign_out$}]

@@ -20,6 +20,7 @@ Rails.application.routes.draw do
         devise_scope :user do
           post :sign_up, to: 'registrations#create'
           post :sign_in, to: 'sessions#create'
+          post :google, to: 'google_sessions#create'
           delete :sign_out, to: 'sessions#destroy'
           resource :confirmation, only: %i[create update]
           resource :password, only: %i[create update]

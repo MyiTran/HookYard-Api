@@ -47,6 +47,7 @@ class User < ApplicationRecord
                             inverse_of: :billing_owner, dependent: :restrict_with_error
   has_many :usage_periods, class_name: 'UserUsagePeriod', dependent: :destroy
   has_many :notifications, dependent: :destroy
+  has_many :user_identities, dependent: :destroy
 
   validates :first_name, presence: true
   validates :last_name, presence: true

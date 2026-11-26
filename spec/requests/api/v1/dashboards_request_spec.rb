@@ -112,6 +112,66 @@ describe 'Dashboards', type: :request do
           'payload', 'token_digest'
         )
       end
+
+      it 'returns the empty dashboard contract for a user without projects' do
+        empty_user = create(:user).tap { |account| account.add_role(:support) }
+
+        get '/api/v1/dashboard', headers: auth_headers(empty_user)
+
+        expect(response).to have_http_status(:ok)
+        expect(json_response).to eq(
+          'workspace' => {
+            'project_count' => 0,
+            'owned_project_count' => 0,
+            'shared_project_count' => 0
+          },
+          'delivery_health' => {
+            'period_label' => 'Last 7 days',
+            'total' => 0,
+            'succeeded' => 0,
+            'failed' => 0,
+            'in_flight' => 0,
+            'held' => 0,
+            'retries_due' => 0,
+            'success_rate' => 0.0
+          },
+          'needs_attention' => {
+            'open_circuit_endpoints' => 0,
+            'held_deliveries' => 0,
+            'retries_due' => 0,
+            'failed_deliveries' => 0
+          },
+          'projects' => []
+        )
+      end
+
+      it 'returns zero metrics for an accessible project without delivery data' do
+        user_without_delivery_data = create(:user)
+        create(:project, :with_owner, owner: user_without_delivery_data)
+
+        get '/api/v1/dashboard', headers: auth_headers(user_without_delivery_data)
+
+        expect(response).to have_http_status(:ok)
+        expect(json_response['workspace']['project_count']).to eq(1)
+        expect(json_response['delivery_health']).to include(
+          'total' => 0,
+          'succeeded' => 0,
+          'failed' => 0,
+          'success_rate' => 0.0
+        )
+        expect(json_response['projects']).to have_attributes(size: 1)
+      end
+
+      it 'keeps dashboard access available to support and admin users' do
+        support_user = create(:user).tap { |account| account.add_role(:support) }
+        admin_user = create(:user).tap { |account| account.add_role(:admin) }
+
+        [support_user, admin_user].each do |account|
+          get '/api/v1/dashboard', headers: auth_headers(account)
+
+          expect(response).to have_http_status(:ok)
+        end
+      end
     end
   end
 end
