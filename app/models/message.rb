@@ -75,6 +75,8 @@ class Message < ApplicationRecord
   validates :hold_reason, inclusion: { in: Webhooks::CircuitPolicy::HOLD_REASONS.values }, allow_nil: true
   validate :hold_state_is_consistent
 
+  after_commit :broadcast_delivery_update
+
   def self.delivery_state_scope(state)
     scope_name = DELIVERY_STATE_SCOPES[state.to_s]
     scope_name ? public_send(scope_name) : nil
@@ -138,6 +140,14 @@ class Message < ApplicationRecord
   end
 
   private
+
+  def broadcast_delivery_update
+    return unless previous_changes.key?('id') || previous_changes.key?('status') ||
+                  previous_changes.key?('held_at') || previous_changes.key?('next_retry_at') ||
+                  previous_changes.key?('attempt_count')
+
+    EndpointDeliveryChannel.broadcast_message(self)
+  end
 
   def finish!(status:, at:)
     super

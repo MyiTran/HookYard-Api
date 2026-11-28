@@ -21,6 +21,7 @@ module Events
     def call(project:, attributes:)
       attributes = attributes.to_h.symbolize_keys
       event, message_ids, created = accept(project, attributes)
+      message_ids.each { |message_id| EndpointDeliveryChannel.broadcast_message(Message.find(message_id)) } if created
       Messages::EnqueueDelivery.call(message_ids: deliverable_message_ids(event))
 
       Result.new(event: event, created: created, message_ids: message_ids)
